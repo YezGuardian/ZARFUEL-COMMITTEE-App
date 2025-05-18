@@ -1,4 +1,3 @@
-
 import { z } from 'zod';
 
 export const progressMap = {
@@ -13,8 +12,8 @@ export const taskFormSchema = z.object({
   description: z.string().optional(),
   phase_id: z.string().min(1, { message: "Phase is required" }),
   responsible_teams: z.array(z.string()).optional(),
-  start_date: z.string().optional().nullable(),
-  end_date: z.string().optional().nullable(),
+  start_date: z.union([z.string(), z.date(), z.null()]).optional().nullable(),
+  end_date: z.union([z.string(), z.date(), z.null()]).optional().nullable(),
   duration: z.string().optional(),
   status: z.enum(['notstarted', 'inprogress', 'ongoing', 'complete']),
   progress_summary: z.string().optional(),

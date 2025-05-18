@@ -26,6 +26,7 @@ import PDFViewer from '@/components/ui/pdf-viewer';
 import { uploadToDrive } from '@/integrations/google/drive-api';
 import MeetingMinutesForm from '@/components/meetings/MeetingMinutesForm';
 import MeetingMinutesViewer from '@/components/meetings/MeetingMinutesViewer';
+import { createMeetingNotification } from '@/utils/notificationService';
 
 const MeetingsPage: React.FC = () => {
   const [meetings, setMeetings] = useState<Event[]>([]);
@@ -45,6 +46,7 @@ const MeetingsPage: React.FC = () => {
   const [uploadingFile, setUploadingFile] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const { user, isAdmin } = useAuth();
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   // Fetch meetings and meeting minutes
   const fetchData = async () => {
@@ -54,35 +56,39 @@ const MeetingsPage: React.FC = () => {
         throw new Error('User not authenticated');
       }
       
-      // First get events created by the user
-      const { data: createdMeetings, error: createdMeetingsError } = await supabase
-        .from('events')
-        .select('*')
-        .eq('is_meeting', true)
-        .eq('created_by', user.id)
-        .order('start_time');
-        
-      if (createdMeetingsError) throw createdMeetingsError;
-      
-      // Then get events where the user is a participant
-      const { data: participatingData, error: participatingError } = await supabase
-        .from('event_participants')
-        .select(`
-          event:event_id (*)
-        `)
-        .eq('user_id', user.id);
-      
-      if (participatingError) throw participatingError;
-      
-      // Extract events from the participant data
-      const participatingMeetings = participatingData
-        .map(item => item.event)
-        .filter(event => event && event.is_meeting) // Ensure it's a meeting
-        .filter(event => event.created_by !== user.id); // Filter out events the user created (already in createdMeetings)
-      
-      // Combine both arrays
-      const allMeetings = [...createdMeetings, ...participatingMeetings];
-      
+      let allMeetings = [];
+      if (isAdmin && isAdmin()) {
+        // Admins, superadmins, and special users see all meetings
+        const { data: allMeetingsData, error: allMeetingsError } = await supabase
+          .from('events')
+          .select('*')
+          .eq('is_meeting', true)
+          .order('start_time');
+        if (allMeetingsError) throw allMeetingsError;
+        allMeetings = allMeetingsData || [];
+      } else {
+        // Regular users: events created by the user
+        const { data: createdMeetings, error: createdMeetingsError } = await supabase
+          .from('events')
+          .select('*')
+          .eq('is_meeting', true)
+          .eq('created_by', user.id)
+          .order('start_time');
+        if (createdMeetingsError) throw createdMeetingsError;
+        // Events where the user is a participant
+        const { data: participatingData, error: participatingError } = await supabase
+          .from('event_participants')
+          .select(`
+            event:event_id (*)
+          `)
+          .eq('user_id', user.id);
+        if (participatingError) throw participatingError;
+        const participatingMeetings = participatingData
+          .map(item => item.event)
+          .filter(event => event && event.is_meeting)
+          .filter(event => event.created_by !== user.id);
+        allMeetings = [...createdMeetings, ...participatingMeetings];
+      }
       // Sort by start time
       const sortedMeetings = allMeetings.sort((a, b) => 
         new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
@@ -265,8 +271,13 @@ const MeetingsPage: React.FC = () => {
   const upcomingMeetings = meetings.filter(meeting => parseISO(meeting.start_time) >= now);
   const previousMeetings = meetings.filter(meeting => parseISO(meeting.start_time) < now);
 
-  const handleCreateMeeting = async (eventData: any) => {
+  const handleCreateMeeting = async (eventData) => {
     try {
+      setIsSubmitting(true);
+      
+      // Close dialog immediately to prevent double submissions
+      setAddDialogOpen(false);
+      
       // Make sure created_by is set to current user
       if (user) {
         eventData.created_by = user.id;
@@ -280,16 +291,66 @@ const MeetingsPage: React.FC = () => {
       delete eventData.participants;
       delete eventData.external_emails;
       
+      // Handle non_user_participants properly
+      if (eventData.non_user_participants) {
+        delete eventData.non_user_participants; // Remove this field to prevent errors
+      }
+      
       // Ensure it's marked as a meeting
       eventData.is_meeting = true;
       
-      const { data, error } = await supabase
-        .from('events')
-        .insert([eventData])
-        .select()
-        .single();
-        
-      if (error) throw error;
+      let data;
+      
+      try {
+        // Check if same meeting exists within a short time window to prevent duplicates
+        const { data: existingMeetings } = await supabase
+          .from('events')
+          .select('id, title')
+          .eq('title', eventData.title)
+          .eq('created_by', user.id)
+          .eq('is_meeting', true)
+          .gt('created_at', new Date(Date.now() - 5000).toISOString()); // Last 5 seconds
+          
+        if (existingMeetings && existingMeetings.length > 0) {
+          console.log('Preventing duplicate meeting creation');
+          data = existingMeetings[0];
+        } else {
+          // Insert new meeting
+          const { data: newData, error } = await supabase
+            .from('events')
+            .insert([eventData])
+            .select()
+            .single();
+            
+          if (error) throw error;
+          data = newData;
+        }
+      } catch (insertError) {
+        // If this is a duplicate key error, try to fetch the recently created meeting
+        if (insertError.message && insertError.message.includes('duplicate key value')) {
+          console.log('Handling duplicate meeting creation gracefully');
+          
+          // Get most recently created meeting with same title by this user
+          const { data: existingMeeting, error: fetchError } = await supabase
+            .from('events')
+            .select('*')
+            .eq('title', eventData.title)
+            .eq('created_by', user.id)
+            .eq('is_meeting', true)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+            
+          if (fetchError) throw insertError; // Rethrow original error if we can't find it
+          data = existingMeeting;
+        } else {
+          throw insertError;
+        }
+      }
+      
+      if (!data || !data.id) {
+        throw new Error('Failed to create or find meeting');
+      }
       
       // Add participants if there are any
       if (data && participants.length > 0) {
@@ -309,11 +370,27 @@ const MeetingsPage: React.FC = () => {
         // Continue execution even if email sending fails
       }
       
+      // Send notification to admin/special/superadmin
+      await createMeetingNotification({
+        meetingId: data.id,
+        meetingTitle: data.title,
+        action: 'created',
+        performedBy: user.email || 'A user',
+        excludeUserId: user.id
+      });
+      
+      // Update local state
+      fetchData();
+      
+      // Show success message
       toast.success('Meeting created successfully!');
-      setAddDialogOpen(false);
+      return true;
     } catch (error) {
       console.error('Error creating meeting:', error);
       toast.error('Failed to create meeting. Please try again.');
+      return false;
+    } finally {
+      setIsSubmitting(false);
     }
   };
   
@@ -397,15 +474,28 @@ const MeetingsPage: React.FC = () => {
   
   const handleDeleteMeeting = async () => {
     if (!currentMeeting) return;
-    
     try {
+      // Log deletion before actual delete
+      await supabase.from('deletion_logs').insert({
+        table_name: 'events',
+        record_id: currentMeeting.id,
+        deleted_by: user?.id || '',
+        deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+        details: currentMeeting,
+      });
+      // Send notification
+      await createMeetingNotification({
+        meetingId: currentMeeting.id,
+        meetingTitle: currentMeeting.title,
+        action: 'deleted',
+        performedBy: user?.user_metadata?.full_name || user?.email || '',
+        excludeUserId: user?.id
+      });
       const { error } = await supabase
         .from('events')
         .delete()
         .eq('id', currentMeeting.id);
-        
       if (error) throw error;
-      
       setMeetings(meetings.filter(m => m.id !== currentMeeting.id));
       toast.success('Meeting deleted successfully');
       setDeleteDialogOpen(false);
@@ -1003,7 +1093,12 @@ const MeetingsPage: React.FC = () => {
       </Dialog>
       
       {/* Schedule New Meeting Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+      <Dialog open={addDialogOpen} onOpenChange={(open) => {
+        // Only allow closing if not submitting
+        if (!isSubmitting) {
+          setAddDialogOpen(open);
+        }
+      }}>
         <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-visible">
           <ScrollArea className="max-h-[calc(85vh-40px)]">
             <DialogHeader>
@@ -1013,10 +1108,14 @@ const MeetingsPage: React.FC = () => {
               </DialogDescription>
             </DialogHeader>
             <EventForm 
-              onSuccess={handleCreateMeeting}
+              onSuccess={async (eventData) => {
+                const result = await handleCreateMeeting(eventData);
+                // Dialog will already be closed by handleCreateMeeting
+                return result;
+              }}
               initialData={{
                 is_meeting: true
-              } as any}
+              }}
             />
           </ScrollArea>
         </DialogContent>

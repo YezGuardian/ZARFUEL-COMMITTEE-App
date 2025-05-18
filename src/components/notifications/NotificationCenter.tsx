@@ -61,7 +61,7 @@ const NotificationItem: React.FC<{ notification: Notification; onRead: (id: stri
   return (
     <div 
       className={`p-3 border-b last:border-0 cursor-pointer transition-colors ${
-        notification.is_read ? 'bg-white' : 'bg-blue-50'
+        notification.is_read || notification.read ? 'opacity-50' : 'bg-blue-50'
       }`} 
       onClick={handleClick}
     >
@@ -73,7 +73,7 @@ const NotificationItem: React.FC<{ notification: Notification; onRead: (id: stri
             {formatDistanceToNow(new Date(notification.created_at), { addSuffix: true })}
           </p>
         </div>
-        {!notification.is_read && (
+        {!(notification.is_read || notification.read) && (
           <div className="w-2 h-2 bg-blue-500 rounded-full mt-2"></div>
         )}
       </div>

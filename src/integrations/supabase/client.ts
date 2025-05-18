@@ -93,9 +93,8 @@ export async function refreshSupabaseSchema() {
     try {
       // Force schema refresh by accessing each table directly
       await Promise.all([
-        supabase.from('forum_posts' as any).select('id').limit(1),
-        supabase.from('forum_comments' as any).select('id').limit(1),
-        supabase.from('forum_notifications' as any).select('id').limit(1)
+        supabase.from('forum_posts').select('id').limit(1),
+        supabase.from('forum_comments').select('id').limit(1)
       ]);
       
       console.log('Successfully refreshed basic schema');
@@ -109,7 +108,7 @@ export async function refreshSupabaseSchema() {
       try {
         // Try individual fields for forum_comments
         await supabase
-          .from('forum_comments' as any)
+          .from('forum_comments')
           .select('likes, is_edited, parent_comment_id')
           .limit(1);
         console.log('Successfully refreshed forum_comments columns');
@@ -121,7 +120,7 @@ export async function refreshSupabaseSchema() {
       try {
         // Try individual fields for forum_posts
         await supabase
-          .from('forum_posts' as any)
+          .from('forum_posts')
           .select('likes, is_edited')
           .limit(1);
         console.log('Successfully refreshed forum_posts columns');

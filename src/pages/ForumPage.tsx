@@ -8,10 +8,22 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Send, ThumbsUp, ThumbsDown, MessageSquare, Edit, Trash2, Reply } from 'lucide-react';
+import { Send, ThumbsUp, ThumbsDown, MessageSquare, Edit, Trash2, Reply, ChevronDown, ChevronUp, MoreHorizontal } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { refreshSupabaseSchema } from '@/integrations/supabase/client';
 import { ForumPost, ForumComment } from '@/types/forum';
+import { createNotification } from '@/utils/notificationService';
+import { UserRole } from '@/utils/permissions';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+
+// Define ForumUser type for notification filtering
+interface ForumUser {
+  id: string;
+  role: string;
+  [key: string]: any;
+}
 
 const ForumPage: React.FC = () => {
   const { user, profile } = useAuth();
@@ -22,10 +34,13 @@ const ForumPage: React.FC = () => {
   const [newPostContent, setNewPostContent] = useState('');
   const [newCommentContent, setNewCommentContent] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<ForumUser[]>([]);
   const [editingPost, setEditingPost] = useState<ForumPost | null>(null);
   const [schemaRefreshed, setSchemaRefreshed] = useState(false);
   const [replyingTo, setReplyingTo] = useState<{commentId: string, postId: string} | null>(null);
+  // New state for expanded comments
+  const [expandedPosts, setExpandedPosts] = useState<Record<string, boolean>>({});
+  const [activeTab, setActiveTab] = useState<string>("recent");
   
   // Refresh schema on load to ensure forum tables are recognized
   useEffect(() => {
@@ -73,17 +88,17 @@ const ForumPage: React.FC = () => {
         // Fetch users for notifications
         const { data: usersData, error: usersError } = await supabase
           .from('profiles')
-          .select('id, first_name, last_name')
+          .select('id, first_name, last_name, role')
           .order('first_name', { ascending: true });
           
         if (usersError) throw usersError;
         setUsers(usersData || []);
         
         // Fix: Use simpler query to avoid foreign key relationship issues
-        const { data: postsData, error: postsError } = await (supabase
-          .from('forum_posts' as any)
+        const { data: postsData, error: postsError } = await supabase
+          .from('forum_posts')
           .select('*')
-          .order('created_at', { ascending: false }) as any);
+          .order('created_at', { ascending: false });
         
         if (postsError) throw postsError;
         
@@ -94,7 +109,7 @@ const ForumPage: React.FC = () => {
               // Fetch author details
               const { data: authorData } = await supabase
                 .from('profiles')
-                .select('first_name, last_name, email')
+                .select('first_name, last_name, email, role')
                 .eq('id', post.author_id)
                 .single();
                 
@@ -113,11 +128,11 @@ const ForumPage: React.FC = () => {
           
           for (const post of postsData) {
             // Simple query to avoid foreign key relationship issues
-            const { data: commentsData, error: commentsError } = await (supabase
-              .from('forum_comments' as any)
+            const { data: commentsData, error: commentsError } = await supabase
+              .from('forum_comments')
               .select('*')
               .eq('post_id', post.id)
-              .order('created_at', { ascending: true }) as any);
+              .order('created_at', { ascending: true });
               
             if (commentsError) throw commentsError;
             
@@ -128,7 +143,7 @@ const ForumPage: React.FC = () => {
                   // Fetch author details
                   const { data: authorData } = await supabase
                     .from('profiles')
-                    .select('first_name, last_name, email')
+                    .select('first_name, last_name, email, role')
                     .eq('id', comment.author_id)
                     .single();
                     
@@ -160,6 +175,51 @@ const ForumPage: React.FC = () => {
     fetchPosts();
   }, [schemaRefreshed]);
   
+  // Subscribe to real-time updates for posts and comments
+  useEffect(() => {
+    // Posts
+    const postsChannel = supabase
+      .channel('forum-posts-channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'forum_posts' }, () => {
+        // Refetch posts and comments when posts change
+        if (schemaRefreshed) {
+          // Only refetch if schema is ready
+          (async () => {
+            await refreshSupabaseSchema();
+            // Trigger the fetchPosts effect
+            setSchemaRefreshed(false);
+            setTimeout(() => setSchemaRefreshed(true), 100);
+          })();
+        }
+      })
+      .subscribe();
+    // Comments
+    const commentsChannel = supabase
+      .channel('forum-comments-channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'forum_comments' }, () => {
+        if (schemaRefreshed) {
+          (async () => {
+            await refreshSupabaseSchema();
+            setSchemaRefreshed(false);
+            setTimeout(() => setSchemaRefreshed(true), 100);
+          })();
+        }
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(postsChannel);
+      supabase.removeChannel(commentsChannel);
+    };
+  }, [schemaRefreshed]);
+  
+  // New function to toggle comments section
+  const toggleComments = (postId: string) => {
+    setExpandedPosts(prev => ({
+      ...prev,
+      [postId]: !prev[postId]
+    }));
+  };
+
   // Create new forum post
   const handleCreatePost = async () => {
     if (!user || !newPostTitle.trim() || !newPostContent.trim()) return;
@@ -175,7 +235,7 @@ const ForumPage: React.FC = () => {
       
       // Create the post
       const { data, error } = await supabase
-        .from('forum_posts' as any)
+        .from('forum_posts')
         .insert({
           title: newPostTitle.trim(),
           content: newPostContent.trim(),
@@ -225,10 +285,10 @@ const ForumPage: React.FC = () => {
           try {
             // Batch notifications in groups to avoid hitting rate limits
             const batchSize = 5;
-            const otherUsers = users.filter(u => u.id !== user.id);
+            const nonViewerUsers = filterNonViewerUsers(users).filter(u => u.id !== user.id);
             
-            for (let i = 0; i < otherUsers.length; i += batchSize) {
-              const batch = otherUsers.slice(i, i + batchSize);
+            for (let i = 0; i < nonViewerUsers.length; i += batchSize) {
+              const batch = nonViewerUsers.slice(i, i + batchSize);
               
               const notificationsToInsert = batch.map(u => ({
                 user_id: u.id,
@@ -241,17 +301,17 @@ const ForumPage: React.FC = () => {
               
               if (notificationsToInsert.length > 0) {
                 await supabase
-                  .from('forum_notifications' as any)
+                  .from('notifications')
                   .insert(notificationsToInsert);
               }
               
               // Small delay between batches to avoid rate limits
-              if (i + batchSize < otherUsers.length) {
+              if (i + batchSize < nonViewerUsers.length) {
                 await new Promise(resolve => setTimeout(resolve, 300));
               }
             }
             
-            console.log(`Notifications created for ${otherUsers.length} users about new post`);
+            console.log(`Notifications created for ${nonViewerUsers.length} users about new post`);
           } catch (notifError) {
             console.error('Error creating post notifications:', notifError);
           }
@@ -278,13 +338,13 @@ const ForumPage: React.FC = () => {
         await refreshSupabaseSchema();
       }
       
-      const { error } = await (supabase
-        .from('forum_posts' as any)
+      const { error } = await supabase
+        .from('forum_posts')
         .update({
           title: newPostTitle.trim(),
           content: newPostContent.trim(),
         })
-        .eq('id', editingPost.id) as any);
+        .eq('id', editingPost.id);
         
       if (error) throw error;
       
@@ -307,13 +367,13 @@ const ForumPage: React.FC = () => {
         const notificationPromises = users.map(async (u) => {
           if (u.id !== user.id) {
             return (supabase
-              .from('forum_notifications' as any)
+              .from('notifications')
               .insert({
                 user_id: u.id,
                 type: 'post_edited',
                 content: `${profile?.first_name} ${profile?.last_name} edited a post: ${newPostTitle}`,
                 source_id: editingPost.id
-              }) as any);
+              }));
           }
           return Promise.resolve();
         });
@@ -337,52 +397,41 @@ const ForumPage: React.FC = () => {
   // Delete post
   const handleDeletePost = async (postId: string) => {
     if (!user) return;
-    
     if (!confirm('Are you sure you want to delete this post?')) {
       return;
     }
-    
     setIsLoading(true);
     try {
-      // Try to refresh schema if not already done
       if (!schemaRefreshed) {
         await refreshSupabaseSchema();
       }
-      
-      const { error } = await (supabase
-        .from('forum_posts' as any)
-        .delete()
-        .eq('id', postId) as any);
-        
-      if (error) throw error;
-      
-      // Remove post from state
-      setPosts(posts.filter(p => p.id !== postId));
-      
-      // Create deletion notifications
-      if (users.length > 0) {
-        const post = posts.find(p => p.id === postId);
-        const notificationPromises = users.map(async (u) => {
-          if (u.id !== user.id) {
-            return (supabase
-              .from('forum_notifications' as any)
-              .insert({
-                user_id: u.id,
-                type: 'post_deleted',
-                content: `${profile?.first_name} ${profile?.last_name} deleted a post: ${post?.title}`,
-                source_id: postId
-              }) as any);
-          }
-          return Promise.resolve();
+      const post = posts.find(p => p.id === postId);
+      if (post) {
+        await supabase.from('deletion_logs').insert({
+          table_name: 'forum_posts',
+          record_id: postId,
+          deleted_by: user?.id || '',
+          deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+          details: post,
         });
-        
-        await Promise.all(notificationPromises);
+        // Send notification to admins/superadmins
+        await createNotification({
+          userId: user.id,
+          type: 'forum_post_deleted',
+          content: `${user?.user_metadata?.full_name || user?.email || ''} deleted forum post: ${post.title}`,
+          link: '/forum',
+        });
       }
-      
+      const { error } = await supabase
+        .from('forum_posts')
+        .delete()
+        .eq('id', postId);
+      if (error) throw error;
+      setPosts(posts.filter(p => p.id !== postId));
       toast.success('Post deleted successfully');
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error deleting post:', error);
-      toast.error(`Failed to delete post: ${error.message}`);
+      toast.error(`Failed to delete post: ${error instanceof Error ? error.message : error}`);
     } finally {
       setIsLoading(false);
     }
@@ -405,27 +454,22 @@ const ForumPage: React.FC = () => {
       const commentContent = newCommentContent[postId].trim();
       
       // Prepare comment data
-      const commentData: any = {
+      const commentData = {
         post_id: postId,
         content: commentContent,
         author_id: user.id,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         is_edited: false,
-        likes: '[]'
+        likes: '[]',
+        ...(replyingTo && replyingTo.postId === postId 
+          ? { parent_comment_id: replyingTo.commentId } 
+          : {})
       };
-      
-      // If replying to a comment, include parent_comment_id
-      if (replyingTo && replyingTo.postId === postId) {
-        commentData.parent_comment_id = replyingTo.commentId;
-        console.log(`Adding reply to comment ${replyingTo.commentId}`);
-      } else {
-        console.log("Adding top-level comment");
-      }
       
       // Insert the comment
       const { data, error } = await supabase
-        .from('forum_comments' as any)
+        .from('forum_comments')
         .insert(commentData)
         .select('*');
         
@@ -487,7 +531,7 @@ const ForumPage: React.FC = () => {
               };
               
               await supabase
-                .from('forum_notifications' as any)
+                .from('notifications')
                 .insert(notificationData);
                 
               console.log('Notification created for comment reply');
@@ -513,7 +557,7 @@ const ForumPage: React.FC = () => {
             };
             
             await supabase
-              .from('forum_notifications' as any)
+              .from('notifications')
               .insert(notificationData);
               
             console.log('Notification created for post author');
@@ -527,7 +571,7 @@ const ForumPage: React.FC = () => {
           try {
             // Batch notifications in groups to avoid hitting rate limits
             const batchSize = 5;
-            const otherUsers = users.filter(u => 
+            const otherUsers = filterNonViewerUsers(users).filter(u => 
               u.id !== user.id && 
               u.id !== post?.author_id && 
               (!replyingTo || !postComments.find(c => c.id === replyingTo.commentId)?.author_id || 
@@ -548,7 +592,7 @@ const ForumPage: React.FC = () => {
               
               if (notificationsToInsert.length > 0) {
                 await supabase
-                  .from('forum_notifications' as any)
+                  .from('notifications')
                   .insert(notificationsToInsert);
               }
               
@@ -577,12 +621,8 @@ const ForumPage: React.FC = () => {
   // Like or dislike a comment
   const handleLikeComment = async (commentId: string, isLike: boolean) => {
     if (!user) return;
-    
-    // Find the comment in any post's comments
     let foundComment: ForumComment | undefined;
     let foundPostId: string | undefined;
-    
-    // Search through all posts' comments to find the one with matching ID
     for (const [postId, postComments] of Object.entries(comments)) {
       const comment = postComments.find(c => c.id === commentId);
       if (comment) {
@@ -591,142 +631,97 @@ const ForumPage: React.FC = () => {
         break;
       }
     }
-    
     if (!foundComment || !foundPostId) {
-      console.error('Comment not found:', commentId);
       toast.error('Comment not found');
       return;
     }
-    
     try {
-      // Try to refresh schema if not already done
       if (!schemaRefreshed) {
         await refreshSupabaseSchema();
       }
-      
-      console.log('Updating like for comment:', commentId, isLike ? 'like' : 'dislike');
-      
-      // Safely parse the likes - handle both string and array formats
+      // Fetch latest likes from DB
+      const { data: latestComment, error: fetchError } = await supabase
+        .from('forum_comments')
+        .select('likes')
+        .eq('id', commentId)
+        .single();
+      if (fetchError) throw fetchError;
       let currentLikes = [];
-      try {
-        if (typeof foundComment.likes === 'string') {
-          // Handle string format
-          if (foundComment.likes.trim() === '') {
-            currentLikes = [];
-          } else {
-            currentLikes = JSON.parse(foundComment.likes);
+      if (latestComment && latestComment.likes) {
+        try {
+          if (typeof latestComment.likes === 'string') {
+            currentLikes = JSON.parse(latestComment.likes);
+          } else if (Array.isArray(latestComment.likes)) {
+            currentLikes = latestComment.likes;
           }
-        } else if (Array.isArray(foundComment.likes)) {
-          // Already in array format
-          currentLikes = foundComment.likes;
-        } else if (foundComment.likes && typeof foundComment.likes === 'object') {
-          // Handle JSON object from database
-          currentLikes = Array.isArray(foundComment.likes) ? foundComment.likes : [];
+        } catch (e) {
+          currentLikes = [];
         }
-      } catch (e) {
-        console.warn('Error parsing likes, treating as empty array:', e);
-        console.log('Problematic likes value:', foundComment.likes);
       }
-      
-      // Ensure currentLikes is always an array
-      if (!Array.isArray(currentLikes)) {
-        console.warn('Likes format not recognized, resetting to empty array');
-        currentLikes = [];
-      }
-      
-      // Check if user already liked/disliked
-      const userLikeIndex = currentLikes.findIndex(like => like && like.userId === user.id);
+      if (!Array.isArray(currentLikes)) currentLikes = [];
+      const userLikeIndex = currentLikes.findIndex(like => like.userId === user.id);
       let newLikes;
-      
       if (userLikeIndex >= 0) {
-        // User already has a like/dislike, update or remove it
         const currentLike = currentLikes[userLikeIndex];
         if (currentLike.isLike === isLike) {
-          // Remove like/dislike if clicking the same button
           newLikes = [...currentLikes.slice(0, userLikeIndex), ...currentLikes.slice(userLikeIndex + 1)];
         } else {
-          // Change like to dislike or vice versa
           newLikes = [...currentLikes];
-          newLikes[userLikeIndex] = { 
-            userId: user.id, 
-            isLike, 
-            userName: `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim() 
+          newLikes[userLikeIndex] = {
+            userId: user.id,
+            isLike,
+            userName: `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
           };
         }
       } else {
-        // Add new like/dislike
-        newLikes = [...currentLikes, { 
-          userId: user.id, 
-          isLike, 
-          userName: `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim() 
+        newLikes = [...currentLikes, {
+          userId: user.id,
+          isLike,
+          userName: `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
         }];
       }
-      
-      // Convert to string for storage - ensure valid format
       const likesString = JSON.stringify(newLikes);
-      console.log('Updated likes to save:', likesString);
+      // Update the comment likes directly
+      const { error: updateError } = await supabase
+        .from('forum_comments')
+        .update({ likes: likesString })
+        .eq('id', commentId);
       
-      // Update in database - make sure we're sending valid JSONB
-      try {
-        const { error } = await supabase
-          .from('forum_comments' as any)
-          .update({ likes: likesString })
-          .eq('id', commentId);
-        
-        if (error) {
-          console.error('Database error when updating comment likes:', error);
-          
-          // Try an alternative approach
-          if (error.message.includes('likes')) {
-            console.log('Trying alternative approach with explicit JSONB cast');
-            // Try direct SQL approach
-            await supabase.rpc('update_comment_likes', { 
-              comment_id: commentId,
-              likes_json: likesString
-            });
-          } else {
-            throw error;
-          }
-        }
-      } catch (dbError) {
-        console.error('Failed to update likes in database:', dbError);
-        throw dbError;
-      }
-      
-      // Update in state to immediately show the change to the user
+      if (updateError) throw updateError;
+      // Refetch comment likes from DB to update state
+      const { data: updatedComment, error: refetchError } = await supabase
+        .from('forum_comments')
+        .select('likes')
+        .eq('id', commentId)
+        .single();
+      if (refetchError) throw refetchError;
       const updatedComments = { ...comments };
-      
       for (const postId in updatedComments) {
-        updatedComments[postId] = updatedComments[postId].map(c => 
-          c.id === commentId ? { ...c, likes: newLikes } : c
+        updatedComments[postId] = updatedComments[postId].map(c =>
+          c.id === commentId ? { ...c, likes: updatedComment && updatedComment.likes ? updatedComment.likes : [] } : c
         );
       }
-      
       setComments(updatedComments);
       
-      // Only send notification if it's not the user's own comment
-      if (foundComment.author_id !== user.id) {
-        // Create notification for the comment author
+      // Send notification to comment author about the like/dislike
+      if (foundComment && foundComment.author_id !== user.id) {
         try {
-          const notificationData = {
-            user_id: foundComment.author_id,
-            type: 'comment_liked',
-            content: `${profile?.first_name || ''} ${profile?.last_name || ''} ${isLike ? 'liked' : 'disliked'} your comment`,
-            source_id: commentId,
-            is_read: false,
-            created_at: new Date().toISOString()
-          };
-          
           await supabase
-            .from('forum_notifications' as any)
-            .insert(notificationData);
-            
-          console.log('Notification created for comment author');
+            .from('notifications')
+            .insert({
+              user_id: foundComment.author_id,
+              type: isLike ? 'comment_liked' : 'comment_disliked',
+              content: `${profile?.first_name || ''} ${profile?.last_name || ''} ${isLike ? 'liked' : 'disliked'} your comment`,
+              source_id: commentId,
+              is_read: false,
+              created_at: new Date().toISOString()
+            });
+          
+          console.log('Notification created for comment like/dislike');
         } catch (notifError) {
-          console.error('Failed to create notification:', notifError);
+          console.error('Error creating comment like notification:', notifError);
         }
       }
-      
       toast.success(isLike ? 'Comment liked' : 'Comment disliked');
     } catch (error: any) {
       console.error('Error updating comment likes:', error);
@@ -737,149 +732,93 @@ const ForumPage: React.FC = () => {
   // Like or dislike a post
   const handleLikePost = async (postId: string, isLike: boolean) => {
     if (!user) return;
-    
     const post = posts.find(p => p.id === postId);
     if (!post) {
       console.error('Post not found:', postId);
       toast.error('Post not found');
       return;
     }
-    
     try {
-      // Try to refresh schema if not already done
       if (!schemaRefreshed) {
         await refreshSupabaseSchema();
       }
-      
-      console.log('Updating like for post:', postId, isLike ? 'like' : 'dislike');
-      
-      // Safely parse the likes
+      // Fetch latest likes from DB
+      const { data: latestPost, error: fetchError } = await supabase
+        .from('forum_posts')
+        .select('likes')
+        .eq('id', postId)
+        .single();
+      if (fetchError) throw fetchError;
       let currentLikes = [];
-      try {
-        if (typeof post.likes === 'string') {
-          currentLikes = JSON.parse(post.likes);
-        } else if (Array.isArray(post.likes)) {
-          currentLikes = post.likes;
+      if (latestPost && latestPost.likes) {
+        try {
+          if (typeof latestPost.likes === 'string') {
+            currentLikes = JSON.parse(latestPost.likes);
+          } else if (Array.isArray(latestPost.likes)) {
+            currentLikes = latestPost.likes;
+          }
+        } catch (e) {
+          currentLikes = [];
         }
-      } catch (e) {
-        console.warn('Error parsing likes, treating as empty array', e);
       }
-      
-      // Ensure currentLikes is an array
-      if (!Array.isArray(currentLikes)) {
-        currentLikes = [];
-      }
-      
-      // Check if user already liked/disliked
+      if (!Array.isArray(currentLikes)) currentLikes = [];
       const userLikeIndex = currentLikes.findIndex(like => like.userId === user.id);
       let newLikes;
-      
       if (userLikeIndex >= 0) {
-        // User already has a like/dislike, update or remove it
         const currentLike = currentLikes[userLikeIndex];
         if (currentLike.isLike === isLike) {
-          // Remove like/dislike if clicking the same button
           newLikes = [...currentLikes.slice(0, userLikeIndex), ...currentLikes.slice(userLikeIndex + 1)];
         } else {
-          // Change like to dislike or vice versa
           newLikes = [...currentLikes];
-          newLikes[userLikeIndex] = { 
-            userId: user.id, 
-            isLike, 
-            userName: `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim() 
+          newLikes[userLikeIndex] = {
+            userId: user.id,
+            isLike,
+            userName: `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
           };
         }
       } else {
-        // Add new like/dislike
-        newLikes = [...currentLikes, { 
-          userId: user.id, 
-          isLike, 
-          userName: `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim() 
+        newLikes = [...currentLikes, {
+          userId: user.id,
+          isLike,
+          userName: `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
         }];
       }
-      
-      // Convert to string for storage
       const likesString = JSON.stringify(newLikes);
-      
-      // Update in database
-      const { data, error } = await supabase
-        .from('forum_posts' as any)
+      // Update post likes directly
+      const { error: updateError } = await supabase
+        .from('forum_posts')
         .update({ likes: likesString })
+        .eq('id', postId);
+      
+      if (updateError) throw updateError;
+      // Refetch post likes from DB to update state
+      const { data: updatedPost, error: refetchError } = await supabase
+        .from('forum_posts')
+        .select('likes')
         .eq('id', postId)
-        .select();
-        
-      if (error) {
-        console.error('Database error when updating post likes:', error);
-        throw error;
-      }
+        .single();
+      if (refetchError) throw refetchError;
+      setPosts(posts.map(p => p.id === postId ? { ...p, likes: updatedPost && updatedPost.likes ? updatedPost.likes : [] } : p));
       
-      console.log('Post likes updated successfully:', data);
-      
-      // Update in state
-      setPosts(posts.map(p => p.id === postId ? { ...p, likes: newLikes } : p));
-      
-      // Only send notification if it's not the user's own post
+      // Send notification to post author about the like/dislike
       if (post.author_id !== user.id) {
-        // Notification for post author
         try {
-          const authorNotification = {
-            user_id: post.author_id,
-            type: 'post_liked',
-            content: `${profile?.first_name || ''} ${profile?.last_name || ''} ${isLike ? 'liked' : 'disliked'} your post: ${post.title}`,
-            source_id: postId,
-            is_read: false,
-            created_at: new Date().toISOString()
-          };
-          
           await supabase
-            .from('forum_notifications' as any)
-            .insert(authorNotification);
-            
-          console.log('Notification created for post author');
-        } catch (notifError) {
-          console.error('Error creating post like notification for author:', notifError);
-        }
-      }
-      
-      // Create notifications for other users (global forum activity)
-      if (users.length > 0) {
-        try {
-          // Batch notifications in groups to avoid hitting rate limits
-          const batchSize = 5;
-          const otherUsers = users.filter(u => 
-            u.id !== user.id && u.id !== post.author_id
-          );
-          
-          for (let i = 0; i < otherUsers.length; i += batchSize) {
-            const batch = otherUsers.slice(i, i + batchSize);
-            
-            const notificationsToInsert = batch.map(u => ({
-              user_id: u.id,
-              type: 'post_activity',
-              content: `${profile?.first_name || ''} ${profile?.last_name || ''} ${isLike ? 'liked' : 'disliked'} a post: ${post.title}`,
+            .from('notifications')
+            .insert({
+              user_id: post.author_id,
+              type: isLike ? 'post_liked' : 'post_disliked',
+              content: `${profile?.first_name || ''} ${profile?.last_name || ''} ${isLike ? 'liked' : 'disliked'} your post: ${post.title}`,
               source_id: postId,
               is_read: false,
               created_at: new Date().toISOString()
-            }));
-            
-            if (notificationsToInsert.length > 0) {
-              await supabase
-                .from('forum_notifications' as any)
-                .insert(notificationsToInsert);
-            }
-            
-            // Small delay between batches to avoid rate limits
-            if (i + batchSize < otherUsers.length) {
-              await new Promise(resolve => setTimeout(resolve, 300));
-            }
-          }
+            });
           
-          console.log(`Notifications created for ${otherUsers.length} other users about post like/dislike`);
+          console.log('Notification created for post like/dislike');
         } catch (notifError) {
-          console.error('Error creating post like notifications for other users:', notifError);
+          console.error('Error creating post like notification:', notifError);
         }
       }
-      
       toast.success(isLike ? 'Post liked' : 'Post disliked');
     } catch (error: any) {
       console.error('Error updating likes:', error);
@@ -974,6 +913,41 @@ const ForumPage: React.FC = () => {
     return commentThreads;
   };
   
+  // Helper to filter out viewer users
+  const filterNonViewerUsers = (users: ForumUser[]) => users.filter(u => u.role !== 'viewer');
+  
+  // Function to get color for user avatar based on role
+  const getUserRoleColor = (role?: string): string => {
+    switch (role) {
+      case 'superadmin':
+        return 'bg-red-500 text-white';
+      case 'admin':
+        return 'bg-blue-500 text-white';
+      case 'special':
+        return 'bg-green-500 text-white';
+      case 'viewer':
+        return 'bg-amber-500 text-white';
+      default:
+        return 'bg-gray-500 text-white';
+    }
+  };
+  
+  // Filter posts based on active tab
+  const getFilteredPosts = () => {
+    if (activeTab === "recent") {
+      return [...posts].sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+    } else if (activeTab === "popular") {
+      return [...posts].sort((a, b) => {
+        const aLikes = getLikesCount(a.likes, true) - getLikesCount(a.likes, false);
+        const bLikes = getLikesCount(b.likes, true) - getLikesCount(b.likes, false);
+        return bLikes - aLikes;
+      });
+    }
+    return posts;
+  };
+  
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-start">
@@ -997,278 +971,613 @@ const ForumPage: React.FC = () => {
         </Button>
       </div>
       
-      {isLoading && posts.length === 0 ? (
-        <div className="flex justify-center items-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          <span className="ml-3 text-muted-foreground">Loading forum posts...</span>
+      <Tabs defaultValue="recent" value={activeTab} onValueChange={setActiveTab}>
+        <div className="flex justify-between items-center mb-4">
+          <TabsList>
+            <TabsTrigger value="recent">Recent Posts</TabsTrigger>
+            <TabsTrigger value="popular">Popular</TabsTrigger>
+          </TabsList>
         </div>
-      ) : posts.length === 0 ? (
-        <Card className="text-center p-8">
-          <CardContent>
-            <MessageSquare className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-            <p className="text-lg font-medium">No posts yet</p>
-            <p className="text-muted-foreground mt-1">Be the first to start a discussion!</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-6">
-          {posts.map(post => (
-            <Card key={post.id} className="overflow-hidden">
-              <CardHeader className="pb-3">
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-3">
-                    <Avatar>
-                      <AvatarFallback>
-                        {getInitials(post.author?.first_name || '', post.author?.last_name || '')}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <CardTitle className="text-lg">{post.title}</CardTitle>
-                      <div className="text-sm text-muted-foreground">
-                        {post.author?.first_name} {post.author?.last_name} · {formatDate(post.created_at)}
-                        {post.is_edited && <span className="ml-2 italic text-xs">(edited)</span>}
+      
+        <TabsContent value="recent" className="mt-0">
+          {isLoading && posts.length === 0 ? (
+            <div className="flex justify-center items-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+              <span className="ml-3 text-muted-foreground">Loading forum posts...</span>
+            </div>
+          ) : posts.length === 0 ? (
+            <Card className="text-center p-8">
+              <CardContent>
+                <MessageSquare className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                <p className="text-lg font-medium">No posts yet</p>
+                <p className="text-muted-foreground mt-1">Be the first to start a discussion!</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {getFilteredPosts().map(post => (
+                <Card key={post.id} className="overflow-hidden">
+                  <CardHeader className="pb-3">
+                    <div className="flex justify-between items-start">
+                      <div className="flex items-center gap-3">
+                        <Avatar>
+                          <AvatarFallback className={getUserRoleColor(post.author?.role)}>
+                            {getInitials(post.author?.first_name || '', post.author?.last_name || '')}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">
+                              {post.author?.first_name} {post.author?.last_name}
+                            </span>
+                            <span className="text-sm text-muted-foreground">
+                              {formatDate(post.created_at)}
+                            </span>
+                            {post.is_edited && (
+                              <span className="text-xs text-muted-foreground italic">(edited)</span>
+                            )}
+                          </div>
+                          <CardTitle className="text-base mt-1">{post.title}</CardTitle>
+                        </div>
                       </div>
+                      
+                      {user && post.author_id === user.id && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleEditPost(post)}>
+                              <Edit className="h-4 w-4 mr-2" />
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem 
+                              onClick={() => handleDeletePost(post.id)}
+                              className="text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
                     </div>
-                  </div>
+                  </CardHeader>
                   
-                  {user && post.author_id === user.id && (
-                    <div className="flex gap-2">
+                  <CardContent className="pb-3 pt-0">
+                    <div className="text-sm whitespace-pre-wrap">{post.content}</div>
+                  </CardContent>
+                  
+                  <CardFooter className="flex justify-between border-t pt-3 pb-2">
+                    <div className="flex space-x-2">
                       <Button 
                         variant="ghost" 
-                        size="sm"
-                        onClick={() => handleEditPost(post)}
+                        size="sm" 
+                        className="flex items-center gap-1 text-xs"
+                        onClick={() => handleLikePost(post.id, true)}
                       >
-                        <Edit className="h-4 w-4" />
+                        <ThumbsUp className="h-4 w-4" 
+                          fill={
+                            getLikeStatus(post.likes, user?.id) === 'like' ? 'currentColor' : 'none'
+                          }
+                        />
+                        <span title={getLikeUsersList(post.likes, true)}>
+                          {getLikesCount(post.likes, true)}
+                        </span>
                       </Button>
                       <Button 
                         variant="ghost" 
-                        size="sm"
-                        onClick={() => handleDeletePost(post.id)}
+                        size="sm" 
+                        className="flex items-center gap-1 text-xs"
+                        onClick={() => handleLikePost(post.id, false)}
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <ThumbsDown className="h-4 w-4"
+                          fill={
+                            getLikeStatus(post.likes, user?.id) === 'dislike' ? 'currentColor' : 'none'
+                          }
+                        />
+                        <span title={getLikeUsersList(post.likes, false)}>
+                          {getLikesCount(post.likes, false)}
+                        </span>
                       </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="flex items-center gap-1 text-xs"
+                        onClick={() => toggleComments(post.id)}
+                      >
+                        <MessageSquare className="h-4 w-4" />
+                        <span>{comments[post.id]?.length || 0}</span>
+                        {expandedPosts[post.id] ? (
+                          <ChevronUp className="h-3 w-3 ml-1" />
+                        ) : (
+                          <ChevronDown className="h-3 w-3 ml-1" />
+                        )}
+                      </Button>
+                    </div>
+                  </CardFooter>
+                  
+                  {/* Comments section - only visible when expanded */}
+                  {expandedPosts[post.id] && (
+                    <div className="bg-muted/30 px-6 py-3 border-t">
+                      {comments[post.id] && comments[post.id].length > 0 ? (
+                        <>
+                          {getCommentThreads(comments[post.id]).map(thread => (
+                            <div key={thread.parent.id} className="mb-6">
+                              {/* Parent comment */}
+                              <div className="flex items-start gap-3 mb-2">
+                                <Avatar className="h-8 w-8 mt-0.5">
+                                  <AvatarFallback className={`text-xs ${getUserRoleColor(thread.parent.author?.role)}`}>
+                                    {getInitials(thread.parent.author?.first_name || '', thread.parent.author?.last_name || '')}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="flex-1">
+                                  <div className="bg-background rounded-lg p-3">
+                                    <div className="font-semibold text-sm">
+                                      {thread.parent.author?.first_name} {thread.parent.author?.last_name}
+                                    </div>
+                                    <div className="text-sm mt-1">{thread.parent.content}</div>
+                                  </div>
+                                  <div className="flex items-center gap-4 mt-1">
+                                    <div className="text-xs text-muted-foreground">
+                                      {formatDate(thread.parent.created_at)}
+                                      {thread.parent.is_edited && <span className="ml-2 italic">(edited)</span>}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Button 
+                                        variant="ghost" 
+                                        size="sm" 
+                                        className="h-6 px-2 text-xs flex items-center gap-1"
+                                        onClick={() => handleLikeComment(thread.parent.id, true)}
+                                      >
+                                        <ThumbsUp className="h-3 w-3" 
+                                          fill={
+                                            getLikeStatus(thread.parent.likes, user?.id) === 'like' ? 'currentColor' : 'none'
+                                          }
+                                        />
+                                        <span>{getLikesCount(thread.parent.likes, true)}</span>
+                                      </Button>
+                                      <Button 
+                                        variant="ghost" 
+                                        size="sm" 
+                                        className="h-6 px-2 text-xs flex items-center gap-1"
+                                        onClick={() => handleLikeComment(thread.parent.id, false)}
+                                      >
+                                        <ThumbsDown className="h-3 w-3"
+                                          fill={
+                                            getLikeStatus(thread.parent.likes, user?.id) === 'dislike' ? 'currentColor' : 'none'
+                                          }
+                                        />
+                                        <span>{getLikesCount(thread.parent.likes, false)}</span>
+                                      </Button>
+                                      <Button 
+                                        variant="ghost" 
+                                        size="sm" 
+                                        className="h-6 px-2 text-xs flex items-center gap-1"
+                                        onClick={() => startReplyingToComment(thread.parent.id, post.id)}
+                                      >
+                                        <Reply className="h-3 w-3" />
+                                        <span>Reply</span>
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Replies */}
+                              {thread.replies.length > 0 && (
+                                <div className="ml-11 pl-6 border-l-2 border-muted">
+                                  {thread.replies.map(reply => (
+                                    <div key={reply.id} className="flex items-start gap-3 mb-3">
+                                      <Avatar className="h-7 w-7 mt-0.5">
+                                        <AvatarFallback className={`text-xs ${getUserRoleColor(reply.author?.role)}`}>
+                                          {getInitials(reply.author?.first_name || '', reply.author?.last_name || '')}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <div className="flex-1">
+                                        <div className="bg-background rounded-lg p-2">
+                                          <div className="font-semibold text-xs">
+                                            {reply.author?.first_name} {reply.author?.last_name}
+                                          </div>
+                                          <div className="text-sm mt-1">{reply.content}</div>
+                                        </div>
+                                        <div className="flex items-center gap-4 mt-1">
+                                          <div className="text-xs text-muted-foreground">
+                                            {formatDate(reply.created_at)}
+                                            {reply.is_edited && <span className="ml-2 italic">(edited)</span>}
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                            <Button 
+                                              variant="ghost" 
+                                              size="sm" 
+                                              className="h-5 px-1.5 text-xs flex items-center gap-1"
+                                              onClick={() => handleLikeComment(reply.id, true)}
+                                            >
+                                              <ThumbsUp className="h-3 w-3" 
+                                                fill={
+                                                  getLikeStatus(reply.likes, user?.id) === 'like' ? 'currentColor' : 'none'
+                                                }
+                                              />
+                                              <span>{getLikesCount(reply.likes, true)}</span>
+                                            </Button>
+                                            <Button 
+                                              variant="ghost" 
+                                              size="sm" 
+                                              className="h-5 px-1.5 text-xs flex items-center gap-1"
+                                              onClick={() => handleLikeComment(reply.id, false)}
+                                            >
+                                              <ThumbsDown className="h-3 w-3"
+                                                fill={
+                                                  getLikeStatus(reply.likes, user?.id) === 'dislike' ? 'currentColor' : 'none'
+                                                }
+                                              />
+                                              <span>{getLikesCount(reply.likes, false)}</span>
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </>
+                      ) : (
+                        <div className="text-center py-3">
+                          <p className="text-sm text-muted-foreground">No comments yet. Be the first to comment!</p>
+                        </div>
+                      )}
+                      
+                      {/* New comment form */}
+                      {user && (
+                        <div className="flex items-start gap-3 mt-4" id={`comment-form-${post.id}`}>
+                          <Avatar className="h-8 w-8 mt-0.5">
+                            <AvatarFallback className={getUserRoleColor(profile?.role)}>
+                              {getInitials(profile?.first_name || '', profile?.last_name || '')}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 flex items-end gap-2">
+                            <Textarea
+                              placeholder={replyingTo && replyingTo.postId === post.id 
+                                ? "Write a reply..." 
+                                : "Write a comment..."}
+                              className="min-h-10 flex-1"
+                              value={newCommentContent[post.id] || ''}
+                              onChange={(e) => setNewCommentContent({
+                                ...newCommentContent,
+                                [post.id]: e.target.value
+                              })}
+                            />
+                            <Button 
+                              size="sm" 
+                              className="h-8"
+                              disabled={!newCommentContent[post.id]?.trim() || isLoading}
+                              onClick={() => handleAddComment(post.id)}
+                            >
+                              <Send className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Show who you're replying to */}
+                      {replyingTo && replyingTo.postId === post.id && (
+                        <div className="ml-11 mt-2 text-xs text-muted-foreground flex items-center">
+                          <span>
+                            Replying to comment - 
+                            <Button 
+                              variant="link" 
+                              className="h-auto p-0 text-xs" 
+                              onClick={() => setReplyingTo(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
-              </CardHeader>
-              
-              <CardContent className="pb-3 pt-0">
-                <div className="text-sm whitespace-pre-wrap">{post.content}</div>
-              </CardContent>
-              
-              <CardFooter className="flex justify-between border-t pt-3 pb-2">
-                <div className="flex space-x-2">
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="flex items-center gap-1 text-xs"
-                    onClick={() => handleLikePost(post.id, true)}
-                  >
-                    <ThumbsUp className="h-4 w-4" 
-                      fill={
-                        getLikeStatus(post.likes, user?.id) === 'like' ? 'currentColor' : 'none'
-                      }
-                    />
-                    <span title={getLikeUsersList(post.likes, true)}>
-                      {getLikesCount(post.likes, true)}
-                    </span>
-                  </Button>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="flex items-center gap-1 text-xs"
-                    onClick={() => handleLikePost(post.id, false)}
-                  >
-                    <ThumbsDown className="h-4 w-4"
-                      fill={
-                        getLikeStatus(post.likes, user?.id) === 'dislike' ? 'currentColor' : 'none'
-                      }
-                    />
-                    <span title={getLikeUsersList(post.likes, false)}>
-                      {getLikesCount(post.likes, false)}
-                    </span>
-                  </Button>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {(comments[post.id]?.length || 0)} comments
-                </div>
-              </CardFooter>
-              
-              {/* Comments section */}
-              <div className="bg-muted/30 px-6 py-3 border-t">
-                {comments[post.id] && getCommentThreads(comments[post.id]).map(thread => (
-                  <div key={thread.parent.id} className="mb-6">
-                    {/* Parent comment */}
-                    <div className="flex items-start gap-3 mb-2">
-                      <Avatar className="h-8 w-8 mt-0.5">
-                        <AvatarFallback className="text-xs">
-                          {getInitials(thread.parent.author?.first_name || '', thread.parent.author?.last_name || '')}
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+        
+        <TabsContent value="popular" className="mt-0">
+          <div className="space-y-4">
+            {getFilteredPosts().map(post => (
+              <Card key={post.id} className="overflow-hidden">
+                <CardHeader className="pb-3">
+                  <div className="flex justify-between items-start">
+                    <div className="flex items-center gap-3">
+                      <Avatar>
+                        <AvatarFallback className={getUserRoleColor(post.author?.role)}>
+                          {getInitials(post.author?.first_name || '', post.author?.last_name || '')}
                         </AvatarFallback>
                       </Avatar>
-                      <div className="flex-1">
-                        <div className="bg-background rounded-lg p-3">
-                          <div className="font-semibold text-sm">
-                            {thread.parent.author?.first_name} {thread.parent.author?.last_name}
-                          </div>
-                          <div className="text-sm mt-1">{thread.parent.content}</div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">
+                            {post.author?.first_name} {post.author?.last_name}
+                          </span>
+                          <span className="text-sm text-muted-foreground">
+                            {formatDate(post.created_at)}
+                          </span>
+                          {post.is_edited && (
+                            <span className="text-xs text-muted-foreground italic">(edited)</span>
+                          )}
                         </div>
-                        <div className="flex items-center gap-4 mt-1">
-                          <div className="text-xs text-muted-foreground">
-                            {formatDate(thread.parent.created_at)}
-                            {thread.parent.is_edited && <span className="ml-2 italic">(edited)</span>}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              className="h-6 px-2 text-xs flex items-center gap-1"
-                              onClick={() => handleLikeComment(thread.parent.id, true)}
-                            >
-                              <ThumbsUp className="h-3 w-3" 
-                                fill={
-                                  getLikeStatus(thread.parent.likes, user?.id) === 'like' ? 'currentColor' : 'none'
-                                }
-                              />
-                              <span>{getLikesCount(thread.parent.likes, true)}</span>
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              className="h-6 px-2 text-xs flex items-center gap-1"
-                              onClick={() => handleLikeComment(thread.parent.id, false)}
-                            >
-                              <ThumbsDown className="h-3 w-3"
-                                fill={
-                                  getLikeStatus(thread.parent.likes, user?.id) === 'dislike' ? 'currentColor' : 'none'
-                                }
-                              />
-                              <span>{getLikesCount(thread.parent.likes, false)}</span>
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              className="h-6 px-2 text-xs flex items-center gap-1"
-                              onClick={() => startReplyingToComment(thread.parent.id, post.id)}
-                            >
-                              <Reply className="h-3 w-3" />
-                              <span>Reply</span>
-                            </Button>
-                          </div>
-                        </div>
+                        <CardTitle className="text-base mt-1">{post.title}</CardTitle>
                       </div>
                     </div>
+                    
+                    {user && post.author_id === user.id && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="sm">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleEditPost(post)}>
+                            <Edit className="h-4 w-4 mr-2" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem 
+                            onClick={() => handleDeletePost(post.id)}
+                            className="text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </div>
+                </CardHeader>
+                
+                <CardContent className="pb-3 pt-0">
+                  <div className="text-sm whitespace-pre-wrap">{post.content}</div>
+                </CardContent>
+                
+                <CardFooter className="flex justify-between border-t pt-3 pb-2">
+                  <div className="flex space-x-2">
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="flex items-center gap-1 text-xs"
+                      onClick={() => handleLikePost(post.id, true)}
+                    >
+                      <ThumbsUp className="h-4 w-4" 
+                        fill={
+                          getLikeStatus(post.likes, user?.id) === 'like' ? 'currentColor' : 'none'
+                        }
+                      />
+                      <span title={getLikeUsersList(post.likes, true)}>
+                        {getLikesCount(post.likes, true)}
+                      </span>
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="flex items-center gap-1 text-xs"
+                      onClick={() => handleLikePost(post.id, false)}
+                    >
+                      <ThumbsDown className="h-4 w-4"
+                        fill={
+                          getLikeStatus(post.likes, user?.id) === 'dislike' ? 'currentColor' : 'none'
+                        }
+                      />
+                      <span title={getLikeUsersList(post.likes, false)}>
+                        {getLikesCount(post.likes, false)}
+                      </span>
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="flex items-center gap-1 text-xs"
+                      onClick={() => toggleComments(post.id)}
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      <span>{comments[post.id]?.length || 0}</span>
+                      {expandedPosts[post.id] ? (
+                        <ChevronUp className="h-3 w-3 ml-1" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3 ml-1" />
+                      )}
+                    </Button>
+                  </div>
+                </CardFooter>
+                
+                {/* Comments section - only visible when expanded */}
+                {expandedPosts[post.id] && (
+                  <div className="bg-muted/30 px-6 py-3 border-t">
+                    {comments[post.id] && comments[post.id].length > 0 ? (
+                      <>
+                        {getCommentThreads(comments[post.id]).map(thread => (
+                          <div key={thread.parent.id} className="mb-6">
+                            {/* Parent comment */}
+                            <div className="flex items-start gap-3 mb-2">
+                              <Avatar className="h-8 w-8 mt-0.5">
+                                <AvatarFallback className={`text-xs ${getUserRoleColor(thread.parent.author?.role)}`}>
+                                  {getInitials(thread.parent.author?.first_name || '', thread.parent.author?.last_name || '')}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="flex-1">
+                                <div className="bg-background rounded-lg p-3">
+                                  <div className="font-semibold text-sm">
+                                    {thread.parent.author?.first_name} {thread.parent.author?.last_name}
+                                  </div>
+                                  <div className="text-sm mt-1">{thread.parent.content}</div>
+                                </div>
+                                <div className="flex items-center gap-4 mt-1">
+                                  <div className="text-xs text-muted-foreground">
+                                    {formatDate(thread.parent.created_at)}
+                                    {thread.parent.is_edited && <span className="ml-2 italic">(edited)</span>}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="h-6 px-2 text-xs flex items-center gap-1"
+                                      onClick={() => handleLikeComment(thread.parent.id, true)}
+                                    >
+                                      <ThumbsUp className="h-3 w-3" 
+                                        fill={
+                                          getLikeStatus(thread.parent.likes, user?.id) === 'like' ? 'currentColor' : 'none'
+                                        }
+                                      />
+                                      <span>{getLikesCount(thread.parent.likes, true)}</span>
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="h-6 px-2 text-xs flex items-center gap-1"
+                                      onClick={() => handleLikeComment(thread.parent.id, false)}
+                                    >
+                                      <ThumbsDown className="h-3 w-3"
+                                        fill={
+                                          getLikeStatus(thread.parent.likes, user?.id) === 'dislike' ? 'currentColor' : 'none'
+                                        }
+                                      />
+                                      <span>{getLikesCount(thread.parent.likes, false)}</span>
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="h-6 px-2 text-xs flex items-center gap-1"
+                                      onClick={() => startReplyingToComment(thread.parent.id, post.id)}
+                                    >
+                                      <Reply className="h-3 w-3" />
+                                      <span>Reply</span>
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
 
-                    {/* Replies */}
-                    {thread.replies.length > 0 && (
-                      <div className="ml-11 pl-6 border-l-2 border-muted">
-                        {thread.replies.map(reply => (
-                          <div key={reply.id} className="flex items-start gap-3 mb-3">
-                            <Avatar className="h-7 w-7 mt-0.5">
-                              <AvatarFallback className="text-xs">
-                                {getInitials(reply.author?.first_name || '', reply.author?.last_name || '')}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div className="flex-1">
-                              <div className="bg-background rounded-lg p-2">
-                                <div className="font-semibold text-xs">
-                                  {reply.author?.first_name} {reply.author?.last_name}
+                              {/* Replies */}
+                              {thread.replies.length > 0 && (
+                                <div className="ml-11 pl-6 border-l-2 border-muted">
+                                  {thread.replies.map(reply => (
+                                    <div key={reply.id} className="flex items-start gap-3 mb-3">
+                                      <Avatar className="h-7 w-7 mt-0.5">
+                                        <AvatarFallback className={`text-xs ${getUserRoleColor(reply.author?.role)}`}>
+                                          {getInitials(reply.author?.first_name || '', reply.author?.last_name || '')}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <div className="flex-1">
+                                        <div className="bg-background rounded-lg p-2">
+                                          <div className="font-semibold text-xs">
+                                            {reply.author?.first_name} {reply.author?.last_name}
+                                          </div>
+                                          <div className="text-sm mt-1">{reply.content}</div>
+                                        </div>
+                                        <div className="flex items-center gap-4 mt-1">
+                                          <div className="text-xs text-muted-foreground">
+                                            {formatDate(reply.created_at)}
+                                            {reply.is_edited && <span className="ml-2 italic">(edited)</span>}
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                            <Button 
+                                              variant="ghost" 
+                                              size="sm" 
+                                              className="h-5 px-1.5 text-xs flex items-center gap-1"
+                                              onClick={() => handleLikeComment(reply.id, true)}
+                                            >
+                                              <ThumbsUp className="h-3 w-3" 
+                                                fill={
+                                                  getLikeStatus(reply.likes, user?.id) === 'like' ? 'currentColor' : 'none'
+                                                }
+                                              />
+                                              <span>{getLikesCount(reply.likes, true)}</span>
+                                            </Button>
+                                            <Button 
+                                              variant="ghost" 
+                                              size="sm" 
+                                              className="h-5 px-1.5 text-xs flex items-center gap-1"
+                                              onClick={() => handleLikeComment(reply.id, false)}
+                                            >
+                                              <ThumbsDown className="h-3 w-3"
+                                                fill={
+                                                  getLikeStatus(reply.likes, user?.id) === 'dislike' ? 'currentColor' : 'none'
+                                                }
+                                              />
+                                              <span>{getLikesCount(reply.likes, false)}</span>
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
                                 </div>
-                                <div className="text-sm mt-1">{reply.content}</div>
-                              </div>
-                              <div className="flex items-center gap-4 mt-1">
-                                <div className="text-xs text-muted-foreground">
-                                  {formatDate(reply.created_at)}
-                                  {reply.is_edited && <span className="ml-2 italic">(edited)</span>}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Button 
-                                    variant="ghost" 
-                                    size="sm" 
-                                    className="h-5 px-1.5 text-xs flex items-center gap-1"
-                                    onClick={() => handleLikeComment(reply.id, true)}
-                                  >
-                                    <ThumbsUp className="h-3 w-3" 
-                                      fill={
-                                        getLikeStatus(reply.likes, user?.id) === 'like' ? 'currentColor' : 'none'
-                                      }
-                                    />
-                                    <span>{getLikesCount(reply.likes, true)}</span>
-                                  </Button>
-                                  <Button 
-                                    variant="ghost" 
-                                    size="sm" 
-                                    className="h-5 px-1.5 text-xs flex items-center gap-1"
-                                    onClick={() => handleLikeComment(reply.id, false)}
-                                  >
-                                    <ThumbsDown className="h-3 w-3"
-                                      fill={
-                                        getLikeStatus(reply.likes, user?.id) === 'dislike' ? 'currentColor' : 'none'
-                                      }
-                                    />
-                                    <span>{getLikesCount(reply.likes, false)}</span>
-                                  </Button>
-                                </div>
-                              </div>
+                              )}
                             </div>
                           </div>
                         ))}
+                      </>
+                    ) : (
+                      <div className="text-center py-3">
+                        <p className="text-sm text-muted-foreground">No comments yet. Be the first to comment!</p>
+                      </div>
+                    )}
+                    
+                    {/* New comment form */}
+                    {user && (
+                      <div className="flex items-start gap-3 mt-4" id={`comment-form-${post.id}`}>
+                        <Avatar className="h-8 w-8 mt-0.5">
+                          <AvatarFallback className={getUserRoleColor(profile?.role)}>
+                            {getInitials(profile?.first_name || '', profile?.last_name || '')}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 flex items-end gap-2">
+                          <Textarea
+                            placeholder={replyingTo && replyingTo.postId === post.id 
+                              ? "Write a reply..." 
+                              : "Write a comment..."}
+                            className="min-h-10 flex-1"
+                            value={newCommentContent[post.id] || ''}
+                            onChange={(e) => setNewCommentContent({
+                              ...newCommentContent,
+                              [post.id]: e.target.value
+                            })}
+                          />
+                          <Button 
+                            size="sm" 
+                            className="h-8"
+                            disabled={!newCommentContent[post.id]?.trim() || isLoading}
+                            onClick={() => handleAddComment(post.id)}
+                          >
+                            <Send className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Show who you're replying to */}
+                    {replyingTo && replyingTo.postId === post.id && (
+                      <div className="ml-11 mt-2 text-xs text-muted-foreground flex items-center">
+                        <span>
+                          Replying to comment - 
+                          <Button 
+                            variant="link" 
+                            className="h-auto p-0 text-xs" 
+                            onClick={() => setReplyingTo(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </span>
                       </div>
                     )}
                   </div>
-                ))}
-                
-                {/* New comment form */}
-                {user && (
-                  <div className="flex items-start gap-3 mt-4" id={`comment-form-${post.id}`}>
-                    <Avatar className="h-8 w-8 mt-0.5">
-                      <AvatarFallback className="text-xs">
-                        {getInitials(profile?.first_name || '', profile?.last_name || '')}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1 flex items-end gap-2">
-                      <Textarea
-                        placeholder={replyingTo && replyingTo.postId === post.id 
-                          ? "Write a reply..." 
-                          : "Write a comment..."}
-                        className="min-h-10 flex-1"
-                        value={newCommentContent[post.id] || ''}
-                        onChange={(e) => setNewCommentContent({
-                          ...newCommentContent,
-                          [post.id]: e.target.value
-                        })}
-                      />
-                      <Button 
-                        size="sm" 
-                        className="h-8"
-                        disabled={!newCommentContent[post.id]?.trim() || isLoading}
-                        onClick={() => handleAddComment(post.id)}
-                      >
-                        <Send className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
                 )}
-                
-                {/* Show who you're replying to */}
-                {replyingTo && replyingTo.postId === post.id && (
-                  <div className="ml-11 mt-2 text-xs text-muted-foreground flex items-center">
-                    <span>
-                      Replying to comment - 
-                      <Button 
-                        variant="link" 
-                        className="h-auto p-0 text-xs" 
-                        onClick={() => setReplyingTo(null)}
-                      >
-                        Cancel
-                      </Button>
-                    </span>
-                  </div>
-                )}
-              </div>
-            </Card>
-          ))}
-        </div>
-      )}
+              </Card>
+            ))}
+          </div>
+        </TabsContent>
+      </Tabs>
       
       {/* New Post / Edit Post Dialog */}
       <Dialog open={newPostDialogOpen} onOpenChange={(open) => {

@@ -1,10 +1,6 @@
+import type { Database } from '@/integrations/supabase/types';
 
-export interface BudgetCategory {
-  id: string; // Making id required
-  name: string;
-  estimated: number;
-  actual: number;
-}
+export type BudgetCategory = Database['public']['Tables']['budget_categories']['Row'];
 
 export interface BudgetData {
   totalBudget: number;

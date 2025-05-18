@@ -528,6 +528,162 @@ export type Database = {
           },
         ]
       }
+      forum_posts: {
+        Row: {
+          id: string;
+          title: string;
+          content: string;
+          author_id: string;
+          created_at: string;
+          updated_at: string;
+          is_edited: boolean;
+          likes: Json; // or string, or Json, depending on your schema
+        };
+        Insert: {
+          id?: string;
+          title: string;
+          content: string;
+          author_id: string;
+          created_at?: string;
+          updated_at?: string;
+          is_edited?: boolean;
+          likes?: Json; // or string, or Json
+        };
+        Update: {
+          id?: string;
+          title?: string;
+          content?: string;
+          author_id?: string;
+          created_at?: string;
+          updated_at?: string;
+          is_edited?: boolean;
+          likes?: Json; // or string, or Json
+        };
+        Relationships: [];
+      },
+      forum_comments: {
+        Row: {
+          id: string;
+          post_id: string;
+          content: string;
+          author_id: string;
+          created_at: string;
+          updated_at: string;
+          is_edited: boolean;
+          likes: Json; // or string, or Json
+          parent_comment_id?: string | null;
+        };
+        Insert: {
+          id?: string;
+          post_id: string;
+          content: string;
+          author_id: string;
+          created_at?: string;
+          updated_at?: string;
+          is_edited?: boolean;
+          likes?: Json; // or string, or Json
+          parent_comment_id?: string | null;
+        };
+        Update: {
+          id?: string;
+          post_id?: string;
+          content?: string;
+          author_id?: string;
+          created_at?: string;
+          updated_at?: string;
+          is_edited?: boolean;
+          likes?: Json; // or string, or Json
+          parent_comment_id?: string | null;
+        };
+        Relationships: [];
+      },
+      budget_categories: {
+        Row: {
+          id: string;
+          name: string;
+          estimated: number;
+          actual: number;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          estimated: number;
+          actual: number;
+        };
+        Update: {
+          id?: string;
+          name?: string;
+          estimated?: number;
+          actual?: number;
+        };
+        Relationships: [];
+      },
+      risks: {
+        Row: {
+          id: string;
+          name: string;
+          category: string;
+          impact: 'low' | 'medium' | 'high' | 'critical';
+          likelihood: 'low' | 'medium' | 'high';
+          status: 'identified' | 'mitigated' | 'ongoing';
+          description: string;
+          mitigation_strategy: string;
+          responsible_person: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          category: string;
+          impact: 'low' | 'medium' | 'high' | 'critical';
+          likelihood: 'low' | 'medium' | 'high';
+          status: 'identified' | 'mitigated' | 'ongoing';
+          description: string;
+          mitigation_strategy: string;
+          responsible_person: string;
+        };
+        Update: {
+          id?: string;
+          name?: string;
+          category?: string;
+          impact?: 'low' | 'medium' | 'high' | 'critical';
+          likelihood?: 'low' | 'medium' | 'high';
+          status?: 'identified' | 'mitigated' | 'ongoing';
+          description?: string;
+          mitigation_strategy?: string;
+          responsible_person?: string;
+        };
+        Relationships: [];
+      },
+      deletion_logs: {
+        Row: {
+          id: string;
+          table_name: string;
+          record_id: string;
+          deleted_by: string;
+          deleted_by_name: string;
+          details: unknown;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          table_name: string;
+          record_id: string;
+          deleted_by: string;
+          deleted_by_name: string;
+          details: unknown;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          table_name?: string;
+          record_id?: string;
+          deleted_by?: string;
+          deleted_by_name?: string;
+          details?: unknown;
+          created_at?: string;
+        };
+        Relationships: [];
+      },
     }
     Views: {
       [_ in never]: never

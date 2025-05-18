@@ -18,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { createNotification, createRepositoryNotification } from '@/utils/notificationService';
 
 interface Repository {
   id: string;
@@ -102,7 +103,18 @@ const DocumentRepository = () => {
         return;
       }
       
-      setRepositories([...repositories, data[0] as Repository]);
+      const newRepository = data[0] as Repository;
+      setRepositories([...repositories, newRepository]);
+      
+      // Send notification to all admins/special/superadmins
+      await createRepositoryNotification({
+        repositoryId: newRepository.id,
+        repositoryName: newRepository.name,
+        action: 'created',
+        performedBy: user?.user_metadata?.full_name || user?.email || '',
+        excludeUserId: user?.id
+      });
+      
       setDialogOpen(false);
       setNewRepoName('');
       setNewRepoUrl('');
@@ -148,6 +160,15 @@ const DocumentRepository = () => {
         repo.id === currentRepo.id ? {...repo, ...updatedRepo} : repo
       ));
       
+      // Send notification to all admins/special/superadmins
+      await createRepositoryNotification({
+        repositoryId: currentRepo.id,
+        repositoryName: newRepoName.trim(),
+        action: 'updated',
+        performedBy: user?.user_metadata?.full_name || user?.email || '',
+        excludeUserId: user?.id
+      });
+      
       setEditDialogOpen(false);
       setCurrentRepo(null);
       setNewRepoName('');
@@ -166,6 +187,24 @@ const DocumentRepository = () => {
     
     try {
       setIsLoading(true);
+      
+      // Log deletion before actual delete
+      await supabase.from('deletion_logs').insert({
+        table_name: 'document_repositories',
+        record_id: currentRepo.id,
+        deleted_by: user?.id || '',
+        deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+        details: currentRepo,
+      });
+
+      // Send notification to all admins/special/superadmins
+      await createRepositoryNotification({
+        repositoryId: currentRepo.id,
+        repositoryName: currentRepo.name,
+        action: 'deleted',
+        performedBy: user?.user_metadata?.full_name || user?.email || '',
+        excludeUserId: user?.id
+      });
       
       const { error } = await supabase
         .from('document_repositories')

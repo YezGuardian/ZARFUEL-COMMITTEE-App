@@ -20,7 +20,7 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
-  const { canViewPage, isAdmin } = useAuth();
+  const { canViewPage, isAdmin, isSuperAdmin } = useAuth();
   
   const navigation = [
     { name: 'Overview', path: '/dashboard', icon: LayoutDashboard, page: 'dashboard' },
@@ -101,6 +101,27 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
                 </NavLink>
               </li>
             ))}
+            {/* Deletion Logs link for super admins only */}
+            {isSuperAdmin() && (
+              <li key="deletion-logs">
+                <NavLink
+                  to="/admin/deletion-logs"
+                  className={({ isActive }) =>
+                    cn(
+                      'flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                      isActive
+                        ? 'bg-zarfuel-gold text-zarfuel-blue'
+                        : 'text-sidebar-foreground hover:bg-sidebar-border'
+                    )
+                  }
+                  end
+                  onClick={handleNavClick}
+                >
+                  <FileArchive className="mr-3 h-5 w-5 dark:text-primary" />
+                  Deletion Logs
+                </NavLink>
+              </li>
+            )}
           </ul>
         </nav>
         

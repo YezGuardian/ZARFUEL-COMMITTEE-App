@@ -20,6 +20,8 @@ import { RefreshCcw, Trash2, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { formatDistanceToNow } from 'date-fns';
+import { createNotification } from '@/utils/notificationService';
+import { useAuth } from '@/contexts/AuthContext';
 
 type Invitation = {
   id: string;
@@ -44,6 +46,7 @@ type PendingUser = {
 const API_BASE_URL = window.location.hostname === 'localhost' ? 'http://localhost:5000/api' : '/api';
 
 const InvitationsList: React.FC = () => {
+  const { user } = useAuth();
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -122,14 +125,31 @@ const InvitationsList: React.FC = () => {
     setRefreshing(false);
   };
   
-  const handleDelete = async (user: PendingUser) => {
+  const handleDelete = async (pendingUser: PendingUser) => {
     try {
-      if (user.isInvitation) {
-        // TODO: Replace with a call to a backend API endpoint that deletes an invitation
+      if (pendingUser.isInvitation) {
+        // Log deletion before actual delete
+        await supabase.from('deletion_logs').insert({
+          table_name: 'invitations',
+          record_id: pendingUser.id,
+          deleted_by: user?.id || '',
+          deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+          details: pendingUser,
+        });
+
+        // Send notification
+        await createNotification({
+          userId: user.id,
+          type: 'invitation_deleted',
+          content: `${user?.user_metadata?.full_name || user?.email || ''} deleted invitation for: ${pendingUser.email}`,
+          link: '/admin/users',
+        });
+
+        // Delete invitation
         const response = await fetch(`${API_BASE_URL}/delete-invitation`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: user.id }),
+          body: JSON.stringify({ id: pendingUser.id }),
         });
         const { error } = await response.json();
         
@@ -137,11 +157,28 @@ const InvitationsList: React.FC = () => {
           throw error;
         }
       } else {
-        // TODO: Replace with a call to a backend API endpoint that deletes a profile
+        // Log deletion before actual delete
+        await supabase.from('deletion_logs').insert({
+          table_name: 'profiles',
+          record_id: pendingUser.id,
+          deleted_by: user?.id || '',
+          deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+          details: pendingUser,
+        });
+
+        // Send notification
+        await createNotification({
+          userId: user.id,
+          type: 'user_deleted',
+          content: `${user?.user_metadata?.full_name || user?.email || ''} deleted user: ${pendingUser.email}`,
+          link: '/admin/users',
+        });
+
+        // Delete profile
         const response = await fetch(`${API_BASE_URL}/delete-profile`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: user.id }),
+          body: JSON.stringify({ id: pendingUser.id }),
         });
         const { error } = await response.json();
         
@@ -149,11 +186,11 @@ const InvitationsList: React.FC = () => {
           throw error;
         }
         
-        // TODO: Replace with a call to a backend API endpoint that deletes an auth user
+        // Delete auth user
         const authResponse = await fetch(`${API_BASE_URL}/delete-auth-user`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: user.id }),
+          body: JSON.stringify({ id: pendingUser.id }),
         });
         const { error: authError } = await authResponse.json();
         
@@ -163,8 +200,8 @@ const InvitationsList: React.FC = () => {
         }
       }
       
-      setPendingUsers(pendingUsers.filter(u => u.id !== user.id));
-      toast.success(`User ${user.email} removed`);
+      setPendingUsers(pendingUsers.filter(u => u.id !== pendingUser.id));
+      toast.success(`User ${pendingUser.email} removed`);
     } catch (error: unknown) {
       console.error('Error deleting user:', error);
       toast.error(`Failed to delete user: ${error instanceof Error ? error.message : 'Unknown error'}`);

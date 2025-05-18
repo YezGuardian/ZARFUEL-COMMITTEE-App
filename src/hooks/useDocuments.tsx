@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { Document } from '@/types/document';
 import { useAuth } from '@/contexts/AuthContext';
+import { createNotification } from '@/utils/notificationService';
 
 interface Folder {
   id: string;
@@ -171,6 +172,15 @@ export const useDocuments = () => {
     }
     
     try {
+      // Log deletion before actual delete
+      await supabase.from('deletion_logs').insert({
+        table_name: 'documents',
+        record_id: documentId,
+        deleted_by: user?.id || '',
+        deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+        details: documents.find(d => d.id === documentId),
+      });
+
       const { error } = await supabase
         .from('documents')
         .delete()
@@ -183,18 +193,12 @@ export const useDocuments = () => {
       
       // Create notification for admin users
       if (user && isAdmin()) {
-        const notificationContent = `${profile?.first_name || user.email} deleted document: ${documentName}`;
-        
-        await supabase
-          .from('notifications')
-          .insert([
-            {
-              user_id: user.id,
-              type: 'document',
-              content: notificationContent,
-              link: '/documents'
-            }
-          ]);
+        await createNotification({
+          userId: user.id,
+          type: 'document_deleted',
+          content: `${user?.user_metadata?.full_name || user?.email || ''} deleted document: ${documentName}`,
+          link: '/documents'
+        });
       }
     } catch (error) {
       console.error('Error deleting document:', error);

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { 
   Card, 
@@ -33,6 +32,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { createNotification, createContactNotification } from '@/utils/notificationService';
 
 interface Contact {
   id: string;
@@ -50,7 +50,7 @@ const ContactsPage: React.FC = () => {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   
   // Contact form state
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -97,20 +97,33 @@ const ContactsPage: React.FC = () => {
   // Handle contact deletion
   const handleDelete = async () => {
     if (!contactToDelete) return;
-    
     try {
+      // Log deletion before actual delete
+      await supabase.from('deletion_logs').insert({
+        table_name: 'contacts',
+        record_id: contactToDelete.id,
+        deleted_by: user?.id || '',
+        deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+        details: contactToDelete,
+      });
+      // Send notification to admins/superadmins
+      await createContactNotification({
+        contactId: contactToDelete.id,
+        contactName: contactToDelete.name,
+        action: 'deleted',
+        performedBy: user?.user_metadata?.full_name || user?.email || '',
+        excludeUserId: user?.id
+      });
       const { error } = await supabase
         .from('contacts')
         .delete()
         .eq('id', contactToDelete.id);
-        
       if (error) throw error;
-      
       setContacts(contacts.filter(c => c.id !== contactToDelete.id));
       toast.success('Contact deleted successfully');
       setIsDeleteDialogOpen(false);
       setContactToDelete(null);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error deleting contact:', error);
       toast.error(error.message || 'Failed to delete contact');
     }

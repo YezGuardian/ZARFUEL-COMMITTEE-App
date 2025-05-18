@@ -16,6 +16,7 @@ import { useNavigate } from 'react-router-dom';
 import { useBudget } from '@/hooks/useBudget';
 import { risks } from '@/data/mockData';
 import { mapMockRiskToAppRisk } from '@/types/risk';
+import type { Database } from '@/integrations/supabase/types';
 
 const Dashboard: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -24,21 +25,10 @@ const Dashboard: React.FC = () => {
   const { needsPasswordChange } = useAuth();
   const navigate = useNavigate();
 
-  // Use the same budget hook as Budget page
-  const {
-    localBudgetData,
-    allocatedPercentage,
-    spentPercentage,
-    remainingBudget,
-    formatCurrency
-  } = useBudget();
-
-  // Use the same risk data and mapping as Risk Management page
-  const risksData = risks.map(mapMockRiskToAppRisk);
-  const mitigatedRisks = risksData.filter(risk => risk.status === 'mitigated');
-  const totalRisks = risksData.length;
-  const mitigatedPercentage = totalRisks > 0 ? Math.round((mitigatedRisks.length / totalRisks) * 100) : 0;
-  const outstandingRisks = totalRisks - mitigatedRisks.length;
+  // Remove useBudget and mock risks
+  // Add state for real budget and risk data
+  const [budgetCategories, setBudgetCategories] = useState<Database['public']['Tables']['budget_categories']['Row'][]>([]);
+  const [risksData, setRisksData] = useState<Database['public']['Tables']['risks']['Row'][]>([]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -74,16 +64,18 @@ const Dashboard: React.FC = () => {
         if (phasesError) throw phasesError;
         setPhases(phasesData as Phase[]);
         
-        // Fetch budget data (mock data for now)
-        const mockBudgetData = {
-          totalBudget: 5000000,
-          allocated: 3500000,
-          spent: 2000000,
-          remainingBudget: 3000000,
-          allocatedPercentage: 70,
-          spentPercentage: 40
-        };
-        
+        // Fetch budget categories from Supabase
+        const { data: budgetData, error: budgetError } = await supabase
+          .from('budget_categories')
+          .select('*');
+        if (budgetError) throw budgetError;
+        setBudgetCategories(budgetData || []);
+        // Fetch risks from Supabase
+        const { data: risksTable, error: risksError } = await supabase
+          .from('risks')
+          .select('*');
+        if (risksError) throw risksError;
+        setRisksData(risksTable || []);
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
         toast.error('Failed to load dashboard data');
@@ -94,6 +86,24 @@ const Dashboard: React.FC = () => {
     
     fetchData();
   }, []);
+  
+  // Calculate budget stats from Supabase data
+  const totalBudget = budgetCategories.reduce((sum, cat) => sum + (cat.estimated || 0), 0);
+  // Calculate allocated as the sum of categories with actual spending > 0 (same as BudgetPage)
+  const allocated = budgetCategories
+    .filter(cat => (cat.actual || 0) > 0)
+    .reduce((sum, cat) => sum + (cat.estimated || 0), 0);
+  const spent = budgetCategories.reduce((sum, cat) => sum + (cat.actual || 0), 0);
+  const remainingBudget = totalBudget - spent;
+  const allocatedPercentage = totalBudget > 0 ? Math.round((allocated / totalBudget) * 100) : 0;
+  const spentPercentage = totalBudget > 0 ? Math.round((spent / totalBudget) * 100) : 0;
+  const formatCurrency = (amount: number) => new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount);
+
+  // Calculate risk stats from Supabase data
+  const totalRisks = risksData.length;
+  const mitigatedRisks = risksData.filter(risk => risk.status === 'mitigated');
+  const mitigatedPercentage = totalRisks > 0 ? Math.round((mitigatedRisks.length / totalRisks) * 100) : 0;
+  const outstandingRisks = totalRisks - mitigatedRisks.length;
   
   // Calculate task statistics
   const taskStats = {
@@ -300,13 +310,13 @@ const Dashboard: React.FC = () => {
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium">Total Budget:</span>
-                      <span className="font-bold">{formatCurrency(localBudgetData.totalBudget)}</span>
+                      <span className="font-bold">{formatCurrency(totalBudget)}</span>
                     </div>
                     
                     <div className="space-y-1">
                       <div className="flex justify-between text-sm">
                         <span>Allocated ({allocatedPercentage}%)</span>
-                        <span>{formatCurrency(localBudgetData.allocated)}</span>
+                        <span>{formatCurrency(allocated)}</span>
                       </div>
                       <div className="w-full bg-muted rounded-full h-2.5">
                         <div 
@@ -319,7 +329,7 @@ const Dashboard: React.FC = () => {
                     <div className="space-y-1">
                       <div className="flex justify-between text-sm">
                         <span>Spent ({spentPercentage}%)</span>
-                        <span>{formatCurrency(localBudgetData.spent)}</span>
+                        <span>{formatCurrency(spent)}</span>
                       </div>
                       <div className="w-full bg-muted rounded-full h-2.5">
                         <div 

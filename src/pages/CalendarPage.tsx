@@ -21,6 +21,7 @@ import StatusBadge from '@/components/dashboard/StatusBadge';
 import { useTasks } from '@/hooks/useTasks';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { createNotification, createMeetingNotification } from '@/utils/notificationService';
 
 interface Event {
   id: string;
@@ -60,6 +61,7 @@ const CalendarPage: React.FC = () => {
   const [currentEvent, setCurrentEvent] = useState<Event | null>(null);
   const [monthName, setMonthName] = useState<string>(format(new Date(), 'MMMM yyyy'));
   const [monthNameClicked, setMonthNameClicked] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { isAdmin, user } = useAuth();
   const { tasks } = useTasks();
   
@@ -172,8 +174,13 @@ const CalendarPage: React.FC = () => {
     }
   };
   
-  const handleCreateEvent = async (eventData: any) => {
+  const handleCreateEvent = async (eventData: Record<string, any>) => {
     try {
+      setIsSubmitting(true);
+      
+      // Close the dialog immediately to prevent double submissions
+      setDialogOpen(false);
+      
       // Make sure we set the current user as created_by
       if (user) {
         eventData.created_by = user.id;
@@ -187,94 +194,121 @@ const CalendarPage: React.FC = () => {
       }
       
       // Extract participants before sending to Supabase
-      // The participants should not be part of the events table insert
       const participants = eventData.participants || [];
-      const nonUserParticipants = eventData.non_user_participants || [];
       delete eventData.participants;
-      delete eventData.non_user_participants;
       
-      console.log('Event data being sent to Supabase:', eventData);
+      // Clean up any other fields that might cause problems
+      if (eventData.non_user_participants) {
+        delete eventData.non_user_participants;
+      }
       
-      // Try standard supabase approach first
+      let data, error;
+      
       try {
-        const { data, error } = await supabase
+        // Try to insert the event
+        const result = await supabase
           .from('events')
           .insert([eventData])
           .select()
           .single();
-          
+        
+        data = result.data;
+        error = result.error;
+        
         if (error) throw error;
-        
-        console.log('Event created successfully:', data);
-        
-        // Add participants if it's a meeting and we have participants
-        if (data && eventData.is_meeting && participants.length > 0) {
-          await addEventParticipants(data.id, participants);
+      } catch (insertError: any) {
+        // If this is a duplicate key error, try to fetch the recently created event
+        if (insertError.message && insertError.message.includes('duplicate key value')) {
+          console.log('Handling duplicate event creation');
           
-          // Send email notifications to participants (if this is a meeting)
-          try {
-            await sendMeetingInvitations(data.id);
-          } catch (emailError) {
-            console.error('Error sending email invitations:', emailError);
-            // Continue execution even if email sending fails
+          // Get most recently created event with same title by this user
+          const { data: existingEvent, error: fetchError } = await supabase
+            .from('events')
+            .select('*')
+            .eq('title', eventData.title)
+            .eq('created_by', user.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+            
+          if (fetchError) throw insertError; // Rethrow original error if we can't find it
+          data = existingEvent;
+        } else {
+          throw insertError;
+        }
+      }
+      
+      console.log('Event created successfully:', data);
+      
+      // Add participants if it's a meeting and we have participants
+      if (data && eventData.is_meeting && participants.length > 0) {
+        await addEventParticipants(data.id, participants);
+        
+        // Send email notifications to participants (if this is a meeting)
+        try {
+          await sendMeetingInvitations(data.id);
+        } catch (emailError) {
+          console.error('Error sending email invitations:', emailError);
+          // Continue execution even if email sending fails
+        }
+      }
+      
+      fetchEvents();
+      
+      // Handle in-app notifications
+      // For regular events, notify all users
+      // For meetings, notify only the participants
+      if (eventData.is_meeting) {
+        // Send notifications to participants if it's a meeting
+        if (participants.length > 0) {
+          for (const participantId of participants) {
+            await createNotification({
+              userId: participantId,
+              type: 'meeting',
+              content: `You have been invited to a meeting: ${eventData.title}`,
+              link: '/meetings'
+            });
           }
         }
-        
-        fetchEvents();
-        setDialogOpen(false);
-        toast.success(eventData.is_meeting ? 'Meeting scheduled successfully' : 'Event created successfully');
-        
-        // Handle in-app notifications
-        // For regular events, notify all users
-        // For meetings, notify only the participants
-        if (eventData.is_meeting) {
-          // Send notifications to participants if it's a meeting
-          if (participants.length > 0) {
-            for (const participantId of participants) {
-              await createNotification(
-                participantId,
-                'meeting',
-                `You have been invited to a meeting: ${eventData.title}`,
-                `/meetings`
-              );
-            }
-          }
-        } else {
-          // For regular events, get all users and notify them
-          try {
-            const { data: allUsers } = await supabase
-              .from('profiles')
-              .select('id');
-              
-            if (allUsers && allUsers.length > 0) {
-              for (const userProfile of allUsers) {
-                // Don't notify the creator about their own event
-                if (userProfile.id !== user.id) {
-                  await createNotification(
-                    userProfile.id,
-                    'event',
-                    `New event created: ${eventData.title}`,
-                    `/calendar`
-                  );
-                }
+      } else {
+        // For regular events, get all users and notify them
+        try {
+          const { data: allUsers } = await supabase
+            .from('profiles')
+            .select('id');
+            
+          if (allUsers && allUsers.length > 0) {
+            for (const userProfile of allUsers) {
+              // Don't notify the creator about their own event
+              if (userProfile.id !== user.id) {
+                await createNotification({
+                  userId: userProfile.id,
+                  type: 'event',
+                  content: `New event created: ${eventData.title}`,
+                  link: '/calendar'
+                });
               }
             }
-          } catch (notifyError) {
-            console.error('Error notifying users about event:', notifyError);
-            // Don't show error to user, just log it
           }
+        } catch (notifyError) {
+          console.error('Error notifying users about event:', notifyError);
+          // Don't show error to user, just log it
         }
-        
-        return true;
-      } catch (insertError: any) {
-        console.error('Initial insert error:', insertError);
-        throw insertError;
       }
-    } catch (error: any) {
+      
+      toast.success(eventData.is_meeting ? 'Meeting scheduled successfully' : 'Event created successfully');
+      return true;
+    } catch (error) {
       console.error('Error creating event:', error);
       toast.error(error.message || 'Failed to create event');
       return false;
+    } finally {
+      setIsSubmitting(false);
     }
+  };
+  
+  const handleCreateSuccess = async (data: Record<string, any>) => {
+    return await handleCreateEvent(data);
   };
   
   // Send email invitations for a meeting
@@ -348,25 +382,6 @@ const CalendarPage: React.FC = () => {
       toast.error('Event was created but failed to add participants');
       return false;
     }
-  };
-  
-  const createNotification = async (userId: string, type: string, content: string, link: string) => {
-    try {
-      const { error } = await supabase
-        .from('notifications')
-        .insert([
-          { user_id: userId, type, content, link }
-        ]);
-      
-      if (error) throw error;
-    } catch (error) {
-      console.error('Error creating notification:', error);
-    }
-  };
-  
-  const handleCreateSuccess = () => {
-    fetchEvents();
-    setDialogOpen(false);
   };
   
   const getDaysWithEvents = () => {
@@ -468,6 +483,24 @@ const CalendarPage: React.FC = () => {
     if (!currentEvent) return;
     
     try {
+      // Log deletion before actual delete
+      await supabase.from('deletion_logs').insert({
+        table_name: 'events',
+        record_id: currentEvent.id,
+        deleted_by: user?.id || '',
+        deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+        details: currentEvent,
+      });
+
+      // Send notifications to admin, special users, and superadmins using the notification service
+      await createMeetingNotification({
+        meetingId: currentEvent.id,
+        meetingTitle: currentEvent.title,
+        action: 'deleted',
+        performedBy: user?.user_metadata?.full_name || user?.email || '',
+        excludeUserId: user?.id // Exclude the user who performed the deletion
+      });
+
       const { error } = await supabase
         .from('events')
         .delete()
@@ -772,13 +805,18 @@ const CalendarPage: React.FC = () => {
         </Card>
       </div>
       
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => {
+        // Only allow closing if not submitting
+        if (!isSubmitting) {
+          setDialogOpen(open);
+        }
+      }}>
         <DialogContent className="sm:max-w-[550px] max-h-[85vh] overflow-visible">
           <DialogHeader>
             <DialogTitle>Add New Event</DialogTitle>
           </DialogHeader>
           <ScrollArea className="max-h-[calc(85vh-120px)] overflow-y-auto">
-            <EventForm onSuccess={handleCreateEvent} />
+            <EventForm onSuccess={handleCreateSuccess} />
           </ScrollArea>
         </DialogContent>
       </Dialog>

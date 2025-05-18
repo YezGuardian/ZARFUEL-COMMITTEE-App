@@ -26,7 +26,17 @@ export const NOTIFICATION_TYPES = {
   // Risk notifications
   RISK_CREATED: 'risk_created',
   RISK_UPDATED: 'risk_updated',
-  RISK_DELETED: 'risk_deleted'
+  RISK_DELETED: 'risk_deleted',
+  
+  // Repository notifications
+  REPOSITORY_CREATED: 'repository_created',
+  REPOSITORY_UPDATED: 'repository_updated',
+  REPOSITORY_DELETED: 'repository_deleted',
+  
+  // Contact notifications
+  CONTACT_CREATED: 'contact_created',
+  CONTACT_UPDATED: 'contact_updated',
+  CONTACT_DELETED: 'contact_deleted'
 };
 
 /**
@@ -166,24 +176,30 @@ export const createTaskNotification = async ({
   try {
     let type: NotificationType;
     let content: string;
-    let link = action !== 'deleted' ? `/tasks?task=${taskId}` : '/tasks';
+    const link = action !== 'deleted' ? `/tasks?task=${taskId}` : '/tasks';
+
+    // If performedBy looks like an email, fetch the user's name
+    let displayName = performedBy;
+    if (!displayName || displayName.includes('@')) {
+      displayName = await getUserFullName(excludeUserId || '');
+    }
 
     switch (action) {
       case 'created':
         type = NOTIFICATION_TYPES.TASK_CREATED;
-        content = `${performedBy} created a new task: ${taskTitle}`;
+        content = `${displayName} created a new task: ${taskTitle}`;
         break;
       case 'updated':
         type = NOTIFICATION_TYPES.TASK_UPDATED;
-        content = `${performedBy} updated task: ${taskTitle}`;
+        content = `${displayName} updated task: ${taskTitle}`;
         break;
       case 'completed':
         type = NOTIFICATION_TYPES.TASK_COMPLETED;
-        content = `${performedBy} marked task as complete: ${taskTitle}`;
+        content = `${displayName} marked task as complete: ${taskTitle}`;
         break;
       case 'deleted':
         type = NOTIFICATION_TYPES.TASK_DELETED;
-        content = `${performedBy} deleted task: ${taskTitle}`;
+        content = `${displayName} deleted task: ${taskTitle}`;
         break;
       default:
         return { success: false, error: 'Invalid task action' };
@@ -197,9 +213,9 @@ export const createTaskNotification = async ({
       link,
       excludeUserId
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error in createTaskNotification:', error);
-    return { success: false, error: error.message || 'Failed to create task notification' };
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to create task notification' };
   }
 };
 
@@ -222,20 +238,26 @@ export const createMeetingNotification = async ({
   try {
     let type: NotificationType;
     let content: string;
-    let link = action !== 'deleted' ? `/calendar?event=${meetingId}` : '/calendar';
+    const link = action !== 'deleted' ? `/calendar?event=${meetingId}` : '/calendar';
+
+    // If performedBy looks like an email, fetch the user's name
+    let displayName = performedBy;
+    if (!displayName || displayName.includes('@')) {
+      displayName = await getUserFullName(excludeUserId || '');
+    }
 
     switch (action) {
       case 'created':
         type = NOTIFICATION_TYPES.MEETING_CREATED;
-        content = `${performedBy} scheduled a new meeting: ${meetingTitle}`;
+        content = `${displayName} scheduled a new meeting: ${meetingTitle}`;
         break;
       case 'updated':
         type = NOTIFICATION_TYPES.MEETING_UPDATED;
-        content = `${performedBy} updated meeting: ${meetingTitle}`;
+        content = `${displayName} updated meeting: ${meetingTitle}`;
         break;
       case 'deleted':
         type = NOTIFICATION_TYPES.MEETING_DELETED;
-        content = `${performedBy} cancelled meeting: ${meetingTitle}`;
+        content = `${displayName} cancelled meeting: ${meetingTitle}`;
         break;
       default:
         return { success: false, error: 'Invalid meeting action' };
@@ -249,9 +271,9 @@ export const createMeetingNotification = async ({
       link,
       excludeUserId
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error in createMeetingNotification:', error);
-    return { success: false, error: error.message || 'Failed to create meeting notification' };
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to create meeting notification' };
   }
 };
 
@@ -274,20 +296,26 @@ export const createBudgetNotification = async ({
   try {
     let type: NotificationType;
     let content: string;
-    let link = action !== 'deleted' ? `/budget?record=${budgetId}` : '/budget';
+    const link = action !== 'deleted' ? `/budget?record=${budgetId}` : '/budget';
+
+    // If performedBy looks like an email, fetch the user's name
+    let displayName = performedBy;
+    if (!displayName || displayName.includes('@')) {
+      displayName = await getUserFullName(excludeUserId || '');
+    }
 
     switch (action) {
       case 'created':
         type = NOTIFICATION_TYPES.BUDGET_CREATED;
-        content = `${performedBy} added a new budget record: ${budgetTitle}`;
+        content = `${displayName} added a new budget record: ${budgetTitle}`;
         break;
       case 'updated':
         type = NOTIFICATION_TYPES.BUDGET_UPDATED;
-        content = `${performedBy} updated budget record: ${budgetTitle}`;
+        content = `${displayName} updated budget record: ${budgetTitle}`;
         break;
       case 'deleted':
         type = NOTIFICATION_TYPES.BUDGET_DELETED;
-        content = `${performedBy} deleted budget record: ${budgetTitle}`;
+        content = `${displayName} deleted budget record: ${budgetTitle}`;
         break;
       default:
         return { success: false, error: 'Invalid budget action' };
@@ -301,9 +329,9 @@ export const createBudgetNotification = async ({
       link,
       excludeUserId
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error in createBudgetNotification:', error);
-    return { success: false, error: error.message || 'Failed to create budget notification' };
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to create budget notification' };
   }
 };
 
@@ -326,20 +354,26 @@ export const createRiskNotification = async ({
   try {
     let type: NotificationType;
     let content: string;
-    let link = action !== 'deleted' ? `/risks?risk=${riskId}` : '/risks';
+    const link = action !== 'deleted' ? `/risks?risk=${riskId}` : '/risks';
+
+    // If performedBy looks like an email, fetch the user's name
+    let displayName = performedBy;
+    if (!displayName || displayName.includes('@')) {
+      displayName = await getUserFullName(excludeUserId || '');
+    }
 
     switch (action) {
       case 'created':
         type = NOTIFICATION_TYPES.RISK_CREATED;
-        content = `${performedBy} added a new risk: ${riskTitle}`;
+        content = `${displayName} added a new risk: ${riskTitle}`;
         break;
       case 'updated':
         type = NOTIFICATION_TYPES.RISK_UPDATED;
-        content = `${performedBy} updated risk: ${riskTitle}`;
+        content = `${displayName} updated risk: ${riskTitle}`;
         break;
       case 'deleted':
         type = NOTIFICATION_TYPES.RISK_DELETED;
-        content = `${performedBy} deleted risk: ${riskTitle}`;
+        content = `${displayName} deleted risk: ${riskTitle}`;
         break;
       default:
         return { success: false, error: 'Invalid risk action' };
@@ -353,8 +387,135 @@ export const createRiskNotification = async ({
       link,
       excludeUserId
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error in createRiskNotification:', error);
-    return { success: false, error: error.message || 'Failed to create risk notification' };
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to create risk notification' };
   }
+};
+
+/**
+ * Create a repository notification
+ */
+export const createRepositoryNotification = async ({
+  repositoryId,
+  repositoryName,
+  action,
+  performedBy,
+  excludeUserId
+}: {
+  repositoryId: string;
+  repositoryName: string;
+  action: 'created' | 'updated' | 'deleted';
+  performedBy: string;
+  excludeUserId?: string;
+}): Promise<{ success: boolean; error?: string }> => {
+  try {
+    let type: NotificationType;
+    let content: string;
+    const link = '/document-repository';
+
+    // If performedBy looks like an email, fetch the user's name
+    let displayName = performedBy;
+    if (!displayName || displayName.includes('@')) {
+      displayName = await getUserFullName(excludeUserId || '');
+    }
+
+    switch (action) {
+      case 'created':
+        type = NOTIFICATION_TYPES.REPOSITORY_CREATED;
+        content = `${displayName} added a new document repository: ${repositoryName}`;
+        break;
+      case 'updated':
+        type = NOTIFICATION_TYPES.REPOSITORY_UPDATED;
+        content = `${displayName} updated document repository: ${repositoryName}`;
+        break;
+      case 'deleted':
+        type = NOTIFICATION_TYPES.REPOSITORY_DELETED;
+        content = `${displayName} deleted document repository: ${repositoryName}`;
+        break;
+      default:
+        return { success: false, error: 'Invalid repository action' };
+    }
+
+    // Create notifications for all admins, special users, and super admins
+    return await createNotificationsForRoles({
+      roles: ['admin', 'special', 'superadmin'],
+      type,
+      content,
+      link,
+      excludeUserId
+    });
+  } catch (error: unknown) {
+    console.error('Error in createRepositoryNotification:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to create repository notification' };
+  }
+};
+
+/**
+ * Create a contact notification
+ */
+export const createContactNotification = async ({
+  contactId,
+  contactName,
+  action,
+  performedBy,
+  excludeUserId
+}: {
+  contactId: string;
+  contactName: string;
+  action: 'created' | 'updated' | 'deleted';
+  performedBy: string;
+  excludeUserId?: string;
+}): Promise<{ success: boolean; error?: string }> => {
+  try {
+    let type: NotificationType;
+    let content: string;
+    const link = '/contacts';
+
+    // If performedBy looks like an email, fetch the user's name
+    let displayName = performedBy;
+    if (!displayName || displayName.includes('@')) {
+      displayName = await getUserFullName(excludeUserId || '');
+    }
+
+    switch (action) {
+      case 'created':
+        type = NOTIFICATION_TYPES.CONTACT_CREATED;
+        content = `${displayName} added a new contact: ${contactName}`;
+        break;
+      case 'updated':
+        type = NOTIFICATION_TYPES.CONTACT_UPDATED;
+        content = `${displayName} updated contact: ${contactName}`;
+        break;
+      case 'deleted':
+        type = NOTIFICATION_TYPES.CONTACT_DELETED;
+        content = `${displayName} deleted contact: ${contactName}`;
+        break;
+      default:
+        return { success: false, error: 'Invalid contact action' };
+    }
+
+    // Create notifications for all admins, special users, and super admins
+    return await createNotificationsForRoles({
+      roles: ['admin', 'special', 'superadmin'],
+      type,
+      content,
+      link,
+      excludeUserId
+    });
+  } catch (error: unknown) {
+    console.error('Error in createContactNotification:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to create contact notification' };
+  }
+};
+
+// Helper to get user full name from profiles
+export const getUserFullName = async (userId: string): Promise<string> => {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('first_name, last_name')
+    .eq('id', userId)
+    .single();
+  if (error || !data) return 'A user';
+  return `${data.first_name || ''} ${data.last_name || ''}`.trim() || 'A user';
 }; 

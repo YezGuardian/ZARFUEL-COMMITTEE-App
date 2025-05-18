@@ -1,9 +1,9 @@
-
 import { useState, useEffect, useCallback } from 'react';
 import { Task, Phase } from '@/types';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { progressMap } from '@/components/tasks/TaskFormSchema';
+import { createNotification } from '@/utils/notificationService';
 
 export const useTasks = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -208,6 +208,29 @@ export const useTasks = () => {
         toast.error('Cannot delete phase with tasks. Delete all tasks in this phase first.');
         return false;
       }
+
+      const phase = phases.find(p => p.id === phaseId);
+      if (!phase) {
+        toast.error('Phase not found');
+        return false;
+      }
+      
+      // Log deletion before actual delete
+      await supabase.from('deletion_logs').insert({
+        table_name: 'phases',
+        record_id: phaseId,
+        deleted_by: user?.id || '',
+        deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+        details: phase,
+      });
+
+      // Send notification
+      await createNotification({
+        userId: user.id,
+        type: 'phase_deleted',
+        content: `${user?.user_metadata?.full_name || user?.email || ''} deleted phase: ${phase.name}`,
+        link: '/tasks',
+      });
       
       const { error } = await supabase
         .from('phases')

@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { downloadFile } from '@/utils/downloadHelper';
 import { uploadToDrive, getDriveDownloadUrl, deleteFromDrive } from '@/integrations/google/drive-api';
+import { createNotification } from '@/integrations/supabase/notifications';
 
 interface FolderContentsDialogProps {
   folder: {
@@ -214,6 +215,23 @@ const FolderContentsDialog: React.FC<FolderContentsDialogProps> = ({ folder, onC
       const document = documents.find(d => d.id === documentId);
       if (!document) return;
       
+      // Log deletion before actual delete
+      await supabase.from('deletion_logs').insert({
+        table_name: 'documents',
+        record_id: documentId,
+        deleted_by: user?.id || '',
+        deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+        details: document,
+      });
+
+      // Send notification
+      await createNotification({
+        userId: user.id,
+        type: 'document_deleted',
+        content: `${user?.user_metadata?.full_name || user?.email || ''} deleted document: ${document.file_name}`,
+        link: '/documents',
+      });
+
       // If it's a Google Drive file, delete it from Drive
       if (document.drive_file_id) {
         await deleteFromDrive(document.drive_file_id);

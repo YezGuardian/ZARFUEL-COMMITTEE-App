@@ -32,6 +32,7 @@ import ForumPage from "@/pages/ForumPage";
 import Unauthorized from "@/pages/Unauthorized";
 import NotFound from "@/pages/NotFound";
 import FixAuth from "@/pages/FixAuth";
+import DeletionLogsPage from '@/pages/DeletionLogsPage';
 
 const queryClient = new QueryClient();
 
@@ -108,6 +109,11 @@ const App = () => (
                       <Route path="users" element={
                         <ProtectedRoute requiresAdmin>
                           <UsersPage />
+                        </ProtectedRoute>
+                      } />
+                      <Route path="admin/deletion-logs" element={
+                        <ProtectedRoute requiresAdmin>
+                          <DeletionLogsPage />
                         </ProtectedRoute>
                       } />
                     </Route>

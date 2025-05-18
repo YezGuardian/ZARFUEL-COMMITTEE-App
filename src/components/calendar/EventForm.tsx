@@ -9,6 +9,7 @@ import { Calendar } from '@/components/ui/calendar';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { Check, ChevronDown, Calendar as CalendarIcon, Clock, Search, Plus, X, Loader2 } from 'lucide-react';
+import { createMeetingNotification } from '@/utils/notificationService';
 import { cn } from '@/lib/utils';
 import { format, parseISO } from 'date-fns';
 import { toast } from 'sonner';
@@ -63,7 +64,7 @@ const eventSchema = z.object({
 type EventFormValues = z.infer<typeof eventSchema>;
 
 interface EventFormProps {
-  onSuccess?: (data: any) => void;
+  onSuccess?: (data: Record<string, any>) => void;
   initialData?: {
     id?: string;
     title?: string;
@@ -90,7 +91,7 @@ type Participant = {
 const EventForm: React.FC<EventFormProps> = ({ onSuccess, initialData }) => {
   const { user, isAdmin } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<Record<string, any>[]>([]);
   const [selectedParticipants, setSelectedParticipants] = useState<string[]>(initialData?.participants || []);
   const [searchQuery, setSearchQuery] = useState('');
   const [newParticipantName, setNewParticipantName] = useState('');
@@ -183,6 +184,8 @@ const EventForm: React.FC<EventFormProps> = ({ onSuccess, initialData }) => {
       return;
     }
     
+    // Prevent multiple submissions
+    if (isSubmitting) return;
     setIsSubmitting(true);
     
     try {
@@ -198,7 +201,7 @@ const EventForm: React.FC<EventFormProps> = ({ onSuccess, initialData }) => {
       endDate.setHours(endHour, endMinute, 0);
       
       // Create the event data
-      const eventData: any = {
+      const eventData = {
         title: values.title,
         description: values.description || '',
         location: values.location || '',
@@ -226,6 +229,20 @@ const EventForm: React.FC<EventFormProps> = ({ onSuccess, initialData }) => {
         if (error) throw error;
         eventId = initialData.id;
         
+        // Send notification for event update
+        try {
+          await createMeetingNotification({
+            meetingId: eventId,
+            meetingTitle: values.title,
+            action: 'updated',
+            performedBy: user?.user_metadata?.full_name || user?.email || '',
+            excludeUserId: user?.id
+          });
+        } catch (notifError) {
+          console.error('Error sending update notification:', notifError);
+          // Continue execution even if notification fails
+        }
+        
         // Delete existing participants to replace them
         if (values.is_meeting) {
           await supabase
@@ -234,15 +251,52 @@ const EventForm: React.FC<EventFormProps> = ({ onSuccess, initialData }) => {
             .eq('event_id', eventId);
         }
       } else {
-        // Insert new event
-        const { data, error } = await supabase
-          .from('events')
-          .insert(eventData)
-          .select('id')
-          .single();
-          
-        if (error) throw error;
-        eventId = data.id;
+        try {
+          // Check if same event exists within a short time window to prevent duplicates
+          const { data: existingEvents } = await supabase
+            .from('events')
+            .select('id')
+            .eq('title', eventData.title)
+            .eq('created_by', user.id)
+            .gt('created_at', new Date(Date.now() - 5000).toISOString()); // Last 5 seconds
+            
+          if (existingEvents && existingEvents.length > 0) {
+            console.log('Preventing duplicate event creation');
+            eventId = existingEvents[0].id;
+          } else {
+            // Insert new event
+            const { data, error } = await supabase
+              .from('events')
+              .insert([eventData])
+              .select('id')
+              .single();
+              
+            if (error) throw error;
+            eventId = data.id;
+          }
+        } catch (insertError: any) {
+          // If error is due to duplicate key, try to fetch the existing record
+          if (insertError.message && insertError.message.includes('duplicate key value')) {
+            console.log('Handling duplicate key error gracefully');
+            // Fetch recently created event with same title by this user
+            const { data: existingEvent } = await supabase
+              .from('events')
+              .select('id')
+              .eq('title', eventData.title)
+              .eq('created_by', user.id)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .single();
+              
+            if (existingEvent && existingEvent.id) {
+              eventId = existingEvent.id;
+            } else {
+              throw insertError; // If we couldn't find it, rethrow the original error
+            }
+          } else {
+            throw insertError;
+          }
+        }
       }
       
       // If it's a meeting, add participants
@@ -255,27 +309,40 @@ const EventForm: React.FC<EventFormProps> = ({ onSuccess, initialData }) => {
             response: 'pending'
           }));
           
-          const { error } = await supabase
-            .from('event_participants')
-            .insert(participants);
-            
-          if (error) throw error;
+          try {
+            const { error } = await supabase
+              .from('event_participants')
+              .insert(participants);
+              
+            if (error) {
+              console.error('Error adding participants:', error);
+              // Continue anyway
+            }
+          } catch (participantError) {
+            console.error('Error handling participants:', participantError);
+            // Continue anyway - don't block event creation
+          }
         }
       }
       
-      toast.success(`Event ${initialData ? 'updated' : 'created'} successfully`);
-      
+      // Success - call onSuccess first, then show toast
       if (onSuccess) {
-        onSuccess({
+        // Prepare the data for onSuccess callback (without problematic fields)
+        const successData = {
           ...eventData,
           id: eventId,
-          participants: selectedParticipants,
-          non_user_participants: nonUserParticipants
-        });
+          participants: selectedParticipants
+        };
+        
+        await onSuccess(successData);
       }
+      
+      toast.success(`Event ${initialData ? 'updated' : 'created'} successfully`);
+      return true;
     } catch (error) {
       console.error('Error saving event:', error);
       toast.error(`Failed to ${initialData ? 'update' : 'create'} event`);
+      return false;
     } finally {
       setIsSubmitting(false);
     }

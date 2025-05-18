@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Card, 
   CardContent, 
@@ -15,7 +15,6 @@ import {
   TableRow 
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { risks } from '@/data/mockData';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
@@ -27,17 +26,18 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import { Risk, mapMockRiskToAppRisk } from '@/types/risk';
 import { H1, Paragraph } from '@/components/ui/typography';
+import { createRiskNotification } from '@/utils/notificationService';
+import { supabase } from '@/integrations/supabase/client';
+import type { Database } from '@/integrations/supabase/types';
 
 const RiskManagementPage: React.FC = () => {
-  // Convert mock risks to the format expected by our component
-  const initialRisks: Risk[] = risks.map(mapMockRiskToAppRisk);
-  
-  const [risksData, setRisksData] = useState<Risk[]>(initialRisks);
-  const [editingRisk, setEditingRisk] = useState<Risk | null>(null);
+  // Use real risks from Supabase
+  const [risksData, setRisksData] = useState<Database['public']['Tables']['risks']['Row'][]>([]);
+  const [editingRisk, setEditingRisk] = useState<Database['public']['Tables']['risks']['Row'] | null>(null);
   const [addRiskDialogOpen, setAddRiskDialogOpen] = useState(false);
   const [editRiskDialogOpen, setEditRiskDialogOpen] = useState(false);
   const [deleteRiskDialogOpen, setDeleteRiskDialogOpen] = useState(false);
-  const [newRisk, setNewRisk] = useState<Omit<Risk, 'id'>>({
+  const [newRisk, setNewRisk] = useState<Omit<Database['public']['Tables']['risks']['Row'], 'id'>>({
     name: '',
     category: '',
     impact: 'medium',
@@ -48,7 +48,24 @@ const RiskManagementPage: React.FC = () => {
     responsible_person: ''
   });
   
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
+  
+  // Fetch risks from Supabase
+  const fetchRisks = async () => {
+    const { data, error } = await supabase
+      .from('risks')
+      .select('*')
+      .order('name');
+    if (error) {
+      toast.error('Failed to load risks');
+      return;
+    }
+    setRisksData(data || []);
+  };
+
+  useEffect(() => {
+    fetchRisks();
+  }, []);
   
   // Calculate the percentage of mitigated risks
   const mitigatedRisks = risksData.filter(risk => risk.status === 'mitigated');
@@ -95,15 +112,24 @@ const RiskManagementPage: React.FC = () => {
     }
   };
   
-  const handleAddRisk = () => {
+  const handleAddRisk = async () => {
     if (!newRisk.name) return;
-    
-    const risk: Risk = {
-      id: Math.random().toString(36).substring(2, 9),
-      ...newRisk
-    };
-    
-    setRisksData([...risksData, risk]);
+    const { data, error } = await supabase
+      .from('risks')
+      .insert({ ...newRisk })
+      .select()
+      .single<Database['public']['Tables']['risks']['Row']>();
+    if (error) {
+      toast.error('Failed to add risk');
+      return;
+    }
+    await createRiskNotification({
+      riskId: data.id,
+      riskTitle: data.name,
+      action: 'created',
+      performedBy: user?.email || 'A user',
+      excludeUserId: user?.id
+    });
     setAddRiskDialogOpen(false);
     setNewRisk({
       name: '',
@@ -116,24 +142,65 @@ const RiskManagementPage: React.FC = () => {
       responsible_person: ''
     });
     toast.success('Risk added successfully');
+    fetchRisks();
   };
   
-  const handleEditRisk = () => {
+  const handleEditRisk = async () => {
     if (!editingRisk) return;
-    
-    setRisksData(risksData.map(risk => risk.id === editingRisk.id ? editingRisk : risk));
+    const { data, error } = await supabase
+      .from('risks')
+      .update({ ...editingRisk })
+      .eq('id', editingRisk.id)
+      .select()
+      .single<Database['public']['Tables']['risks']['Row']>();
+    if (error) {
+      toast.error('Failed to update risk');
+      return;
+    }
+    await createRiskNotification({
+      riskId: editingRisk.id,
+      riskTitle: editingRisk.name,
+      action: 'updated',
+      performedBy: user?.email || 'A user',
+      excludeUserId: user?.id
+    });
     setEditRiskDialogOpen(false);
     setEditingRisk(null);
     toast.success('Risk updated successfully');
+    fetchRisks();
   };
   
-  const handleDeleteRisk = () => {
+  const handleDeleteRisk = async () => {
     if (!editingRisk) return;
-    
-    setRisksData(risksData.filter(risk => risk.id !== editingRisk.id));
+    const deletedRisk = editingRisk;
+    const { error } = await supabase
+      .from('risks')
+      .delete()
+      .eq('id', editingRisk.id);
+    if (error) {
+      toast.error('Failed to delete risk');
+      return;
+    }
+    // Log deletion
+    await supabase.from('deletion_logs').insert({
+      table_name: 'risks',
+      record_id: deletedRisk.id,
+      deleted_by: user?.id || '',
+      deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+      details: deletedRisk,
+    });
+    // Send notification
+    await createRiskNotification({
+      riskId: deletedRisk.id,
+      riskTitle: deletedRisk.name,
+      action: 'deleted',
+      performedBy: user?.user_metadata?.full_name || user?.email || '',
+      excludeUserId: user?.id
+    });
     setDeleteRiskDialogOpen(false);
     setEditingRisk(null);
     toast.success('Risk deleted successfully');
+    fetchRisks();
   };
   
   return (
@@ -291,7 +358,7 @@ const RiskManagementPage: React.FC = () => {
                     <Label htmlFor="risk-impact">Impact</Label>
                     <Select
                       value={newRisk.impact}
-                      onValueChange={(value) => setNewRisk({ ...newRisk, impact: value as any })}
+                      onValueChange={(value) => setNewRisk({ ...newRisk, impact: value as 'low' | 'medium' | 'high' | 'critical' })}
                     >
                       <SelectTrigger id="risk-impact">
                         <SelectValue placeholder="Select impact" />
@@ -309,7 +376,7 @@ const RiskManagementPage: React.FC = () => {
                     <Label htmlFor="risk-likelihood">Likelihood</Label>
                     <Select
                       value={newRisk.likelihood}
-                      onValueChange={(value) => setNewRisk({ ...newRisk, likelihood: value as any })}
+                      onValueChange={(value) => setNewRisk({ ...newRisk, likelihood: value as 'low' | 'medium' | 'high' })}
                     >
                       <SelectTrigger id="risk-likelihood">
                         <SelectValue placeholder="Select likelihood" />
@@ -328,7 +395,7 @@ const RiskManagementPage: React.FC = () => {
                     <Label htmlFor="risk-status">Status</Label>
                     <Select
                       value={newRisk.status}
-                      onValueChange={(value) => setNewRisk({ ...newRisk, status: value as any })}
+                      onValueChange={(value) => setNewRisk({ ...newRisk, status: value as 'identified' | 'mitigated' | 'ongoing' })}
                     >
                       <SelectTrigger id="risk-status">
                         <SelectValue placeholder="Select status" />
@@ -428,7 +495,7 @@ const RiskManagementPage: React.FC = () => {
                       <Label htmlFor="edit-risk-impact">Impact</Label>
                       <Select
                         value={editingRisk.impact}
-                        onValueChange={(value) => setEditingRisk({ ...editingRisk, impact: value as any })}
+                        onValueChange={(value) => setEditingRisk({ ...editingRisk, impact: value as 'low' | 'medium' | 'high' | 'critical' })}
                       >
                         <SelectTrigger id="edit-risk-impact">
                           <SelectValue placeholder="Select impact" />
@@ -446,7 +513,7 @@ const RiskManagementPage: React.FC = () => {
                       <Label htmlFor="edit-risk-likelihood">Likelihood</Label>
                       <Select
                         value={editingRisk.likelihood}
-                        onValueChange={(value) => setEditingRisk({ ...editingRisk, likelihood: value as any })}
+                        onValueChange={(value) => setEditingRisk({ ...editingRisk, likelihood: value as 'low' | 'medium' | 'high' })}
                       >
                         <SelectTrigger id="edit-risk-likelihood">
                           <SelectValue placeholder="Select likelihood" />
@@ -465,7 +532,7 @@ const RiskManagementPage: React.FC = () => {
                       <Label htmlFor="edit-risk-status">Status</Label>
                       <Select
                         value={editingRisk.status}
-                        onValueChange={(value) => setEditingRisk({ ...editingRisk, status: value as any })}
+                        onValueChange={(value) => setEditingRisk({ ...editingRisk, status: value as 'identified' | 'mitigated' | 'ongoing' })}
                       >
                         <SelectTrigger id="edit-risk-status">
                           <SelectValue placeholder="Select status" />

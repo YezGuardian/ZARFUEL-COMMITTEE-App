@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
@@ -15,6 +14,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
+import { createContactNotification } from '@/utils/notificationService';
 
 interface ContactFormDialogProps {
   open: boolean; // Changed from isOpen to open
@@ -108,10 +108,20 @@ const ContactFormDialog: React.FC<ContactFormDialogProps> = ({
           .eq('id', contact.id);
 
         if (error) throw error;
+        
+        // Send notification for contact update
+        await createContactNotification({
+          contactId: contact.id,
+          contactName: formData.name,
+          action: 'updated',
+          performedBy: user?.user_metadata?.full_name || user?.email || '',
+          excludeUserId: user?.id
+        });
+        
         toast.success('Contact updated successfully');
       } else {
         // Create new contact
-        const { error } = await supabase.from('contacts').insert({
+        const { data, error } = await supabase.from('contacts').insert({
           name: formData.name, // Make sure name is included and required
           email: formData.email || null,
           phone: formData.phone || null,
@@ -121,9 +131,21 @@ const ContactFormDialog: React.FC<ContactFormDialogProps> = ({
           visibility: formData.visibility,
           company_visibility: formData.company_visibility,
           created_by: user?.id,
-        });
+        }).select();
 
         if (error) throw error;
+        
+        // Send notification for contact creation
+        if (data && data[0]) {
+          await createContactNotification({
+            contactId: data[0].id,
+            contactName: formData.name,
+            action: 'created',
+            performedBy: user?.user_metadata?.full_name || user?.email || '',
+            excludeUserId: user?.id
+          });
+        }
+        
         toast.success('Contact created successfully');
       }
       onSuccess();

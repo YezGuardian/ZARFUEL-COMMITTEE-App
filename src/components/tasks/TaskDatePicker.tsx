@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { format } from 'date-fns';
 import { CalendarIcon } from 'lucide-react';
@@ -33,6 +32,13 @@ const TaskDatePicker: React.FC<TaskDatePickerProps> = ({
   // Convert string date to Date object if needed
   const dateValue = date ? (typeof date === 'string' ? new Date(date) : date) : undefined;
   
+  // Handle date selection with proper conversion
+  const handleSelect = (newDate: Date | undefined) => {
+    // When a date is selected, always pass a Date object
+    // This ensures consistency in the form values
+    onSelect(newDate);
+  };
+  
   return (
     <FormItem className="flex flex-col">
       <FormLabel>{label}</FormLabel>
@@ -60,7 +66,7 @@ const TaskDatePicker: React.FC<TaskDatePickerProps> = ({
           <Calendar
             mode="single"
             selected={dateValue}
-            onSelect={onSelect}
+            onSelect={handleSelect}
             disabled={disabled}
             initialFocus
             className={cn("p-3 pointer-events-auto")}

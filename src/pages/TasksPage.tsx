@@ -18,6 +18,7 @@ import { supabase } from '@/integrations/supabase/client';
 import EditPhaseDialog from '@/components/tasks/EditPhaseDialog';
 import DeletePhaseDialog from '@/components/tasks/DeletePhaseDialog';
 import { H1, Paragraph } from '@/components/ui/typography';
+import { createTaskNotification } from '@/utils/notificationService';
 
 const TasksPage: React.FC = () => {
   // State for filters
@@ -40,7 +41,7 @@ const TasksPage: React.FC = () => {
   const [currentPhaseName, setCurrentPhaseName] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const { tasks, phases, teams, isLoading, fetchData, handleDeleteTask, handleCreatePhase, handleUpdatePhase, handleDeletePhase, updateTaskOrder } = useTasks();
   
   // Filter tasks based on current filters
@@ -80,9 +81,24 @@ const TasksPage: React.FC = () => {
   
   const handleConfirmDelete = async () => {
     if (!currentTask || isProcessing) return;
-    
     try {
       setIsProcessing(true);
+      // Log deletion before actual delete
+      await supabase.from('deletion_logs').insert({
+        table_name: 'tasks',
+        record_id: currentTask.id,
+        deleted_by: user?.id || '',
+        deleted_by_name: (user?.user_metadata?.full_name || user?.email || ''),
+        details: currentTask,
+      });
+      // Send notification
+      await createTaskNotification({
+        taskId: currentTask.id,
+        taskTitle: currentTask.title,
+        action: 'deleted',
+        performedBy: user?.user_metadata?.full_name || user?.email || '',
+        excludeUserId: user?.id
+      });
       const success = await handleDeleteTask(currentTask.id);
       if (success) {
         setDeleteDialogOpen(false);

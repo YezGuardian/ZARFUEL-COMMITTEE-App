@@ -19,7 +19,7 @@ import InviteUserForm from '@/components/admin/InviteUserForm';
 import InvitationsList from '@/components/admin/InvitationsList';
 import UsersList from '@/components/admin/UsersList';
 import { useAuth } from '@/contexts/AuthContext';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Link } from 'react-router-dom';
 
 const UsersPage: React.FC = () => {
   const { isAdmin, isSuperAdmin } = useAuth();
@@ -72,6 +72,13 @@ const UsersPage: React.FC = () => {
           </TabsContent>
         </Tabs>
       </div>
+      {isSuperAdmin() && (
+        <div className="mb-4">
+          <Link to="/admin/deletion-logs" className="text-blue-600 hover:underline">
+            View Deletion Logs
+          </Link>
+        </div>
+      )}
     </div>
   );
 };
